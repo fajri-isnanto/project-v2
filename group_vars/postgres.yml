@@ -22,9 +22,9 @@ etcd_hosts: "pg-1:2379,pg-2:2379,pg-3:2379"
 
 # IP statis tiap node (wajib sama dgn inventory.ini)
 pg_node_ip:
-  pg-1: "10.192.66.195"
-  pg-2: "10.192.67.27"
-  pg-3: "10.192.67.133"
+  pg-1: "10.192.66.230"
+  pg-2: "10.192.67.65"
+  pg-3: "10.192.67.184"
 
 # Password — LAB ONLY (production wajib ansible-vault)
 pg_superuser_password: "kodok"
