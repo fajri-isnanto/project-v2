@@ -1,0 +1,83 @@
+---
+# 04-verifikasi-instalasi.yml — Verifikasi hasil instalasi Valkey (install-only)
+# Model 3 fase bkpm-ha-v2 — dipakai SETELAH fase 02, SEBELUM fase 03 (cluster).
+# Cek: versi binary, keberadaan 6 binary, unit systemd, autostart, user/grup, direktori.
+# Catatan: valkey = install BINARY (bukan apt) — jadi tidak ada package_facts.
+# Service baru AKTIF di fase 03 — is-active "inactive" di sini itu WAJAR, bukan error.
+# Output langsung di-print via debug per node.
+
+- name: "Verifikasi instalasi Valkey (versi binary, komponen, status service)"
+  hosts: valkey
+  become: yes
+  gather_facts: no
+  tasks:
+    - name: "Ambil versi valkey-server"
+      ansible.builtin.command: /usr/local/bin/valkey-server --version
+      register: versi_server
+      changed_when: false
+
+    - name: "Ambil versi valkey-cli"
+      ansible.builtin.command: /usr/local/bin/valkey-cli --version
+      register: versi_cli
+      changed_when: false
+
+    - name: "Cek keberadaan 6 binary di /usr/local/bin"
+      ansible.builtin.stat:
+        path: "/usr/local/bin/{{ item }}"
+      loop:
+        - valkey-server
+        - valkey-sentinel
+        - valkey-cli
+        - valkey-benchmark
+        - valkey-check-rdb
+        - valkey-check-aof
+      register: hasil_binary
+
+    - name: "Cek unit systemd valkey-server dan valkey-sentinel"
+      ansible.builtin.stat:
+        path: "/etc/systemd/system/{{ item }}"
+      loop:
+        - valkey-server.service
+        - valkey-sentinel.service
+      register: hasil_unit
+
+    - name: "Cek autostart service"
+      ansible.builtin.command: systemctl is-enabled valkey-server valkey-sentinel
+      register: status_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: "Cek status aktif service"
+      ansible.builtin.command: systemctl is-active valkey-server valkey-sentinel
+      register: status_active
+      changed_when: false
+      failed_when: false
+
+    - name: "Cek user dan grup valkey"
+      ansible.builtin.command: id valkey
+      register: hasil_user
+      changed_when: false
+      failed_when: false
+
+    - name: "Cek direktori data valkey"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /var/lib/valkey
+        - /var/log/valkey
+        - /var/run/valkey
+        - /etc/valkey
+      register: hasil_dir
+
+    - name: "Tampilkan hasil verifikasi lengkap"
+      ansible.builtin.debug:
+        msg:
+          - "HOST: {{ inventory_hostname }}"
+          - "Versi valkey-server: {{ versi_server.stdout | default('GAGAL') }}"
+          - "Versi valkey-cli: {{ versi_cli.stdout | default('GAGAL') }}"
+          - "Binary /usr/local/bin: {{ hasil_binary.results | map(attribute='stat') | map(attribute='exists') | list }}"
+          - "Unit systemd: {{ hasil_unit.results | map(attribute='stat') | map(attribute='exists') | list }}"
+          - "Autostart (is-enabled): {{ status_enabled.stdout | default('?') }}"
+          - "Aktif (is-active): {{ status_active.stdout | default('?') }} (inactive = wajar, start di fase 03)"
+          - "User valkey: {{ hasil_user.stdout | default('GAGAL') }}"
+          - "Direktori ada: {{ hasil_dir.results | map(attribute='stat') | map(attribute='exists') | list }}"
