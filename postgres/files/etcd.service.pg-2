@@ -11,11 +11,11 @@ Group=etcd
 ExecStart=/usr/local/bin/etcd \
   --name=pg-2 \
   --data-dir=/var/lib/etcd \
-  --listen-peer-urls=http://192.168.1.51:2380 \
-  --initial-advertise-peer-urls=http://192.168.1.51:2380 \
-  --listen-client-urls=http://192.168.1.51:2379,http://127.0.0.1:2379 \
-  --advertise-client-urls=http://192.168.1.51:2379 \
-  --initial-cluster=pg-1=http://192.168.1.50:2380,pg-2=http://192.168.1.51:2380,pg-3=http://192.168.1.52:2380 \
+  --listen-peer-urls=http://10.192.67.27:2380 \
+  --initial-advertise-peer-urls=http://10.192.67.27:2380 \
+  --listen-client-urls=http://10.192.67.27:2379,http://127.0.0.1:2379 \
+  --advertise-client-urls=http://10.192.67.27:2379 \
+  --initial-cluster=pg-1=http://10.192.66.195:2380,pg-2=http://10.192.67.27:2380,pg-3=http://10.192.67.133:2380 \
   --initial-cluster-state=new \
   --initial-cluster-token=pg-ha-etcd-cluster \
   --auto-compaction-mode=periodic \
