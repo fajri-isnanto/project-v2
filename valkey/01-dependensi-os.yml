@@ -1,0 +1,52 @@
+---
+# 01-dependensi-os.yml — Fase 1: persiapan level OS untuk Valkey
+# Model 3 fase bkpm-ha-v2 (varian install-only client)
+# PENTING: build tools TIDAK diperlukan — Valkey dipasang dari binary resmi valkey.io
+# (9.1.1 noble x86_64), bukan compile source dan bukan apt (noble universe cuma 7.2.12).
+# Binary install tidak membuat user/direktori — itu sebabnya dibuat manual di sini.
+# (sumber: valkey-deps.yml lama — build deps dihapus saat pindah ke binary)
+
+- name: Fase 1 - Siapkan user, grup, dan direktori untuk Valkey
+  hosts: valkey
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: Perbarui cache apt
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Buat grup valkey
+      ansible.builtin.group:
+        name: valkey
+        state: present
+        system: yes
+
+    - name: Buat user valkey (system, tanpa home)
+      ansible.builtin.user:
+        name: valkey
+        group: valkey
+        shell: /usr/sbin/nologin
+        create_home: no
+        system: yes
+        state: present
+
+    - name: Buat direktori data valkey
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: valkey
+        group: valkey
+        mode: '0750'
+      loop:
+        - /var/log/valkey
+        - /var/lib/valkey
+        - /var/run/valkey
+
+    - name: Buat direktori konfigurasi /etc/valkey
+      ansible.builtin.file:
+        path: /etc/valkey
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'

@@ -1,0 +1,98 @@
+---
+# 03a-konfigurasi-etcd.yml — Fase 3a: konfigurasi + start etcd 3-node
+# Model 3 fase bkpm-ha-v2 — hasil akhir: etcd cluster 3/3 healthy
+# TANPA JINJA: unit file statis per node di files/ (etcd.service.pg-N),
+# dipilih via branching when. Nilai sudah di-render manual per node.
+# initial-cluster-state=new (hardcode): saat data-dir ada, etcd otomatis
+# pakai data existing (flag diabaikan). Reprovision dari nol = hapus
+# /var/lib/etcd di 3 node dulu, baru jalankan ulang.
+# (sumber: pg-02-etcd.yml lama — bagian config dipisah dari install)
+
+- name: "Fase 3a - Konfigurasi dan start etcd 3-node"
+  hosts: postgres
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: "Buat system user etcd"
+      ansible.builtin.user:
+        name: "{{ etcd_user }}"
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+
+    - name: "Buat data dir etcd"
+      ansible.builtin.file:
+        path: "{{ etcd_data_dir }}"
+        state: directory
+        owner: "{{ etcd_user }}"
+        group: "{{ etcd_user }}"
+        mode: "0750"
+
+    - name: "Salin unit systemd etcd untuk pg-1"
+      ansible.builtin.copy:
+        src: files/etcd.service.pg-1
+        dest: /etc/systemd/system/etcd.service
+        mode: "0644"
+      when: inventory_hostname == 'pg-1'
+
+    - name: "Salin unit systemd etcd untuk pg-2"
+      ansible.builtin.copy:
+        src: files/etcd.service.pg-2
+        dest: /etc/systemd/system/etcd.service
+        mode: "0644"
+      when: inventory_hostname == 'pg-2'
+
+    - name: "Salin unit systemd etcd untuk pg-3"
+      ansible.builtin.copy:
+        src: files/etcd.service.pg-3
+        dest: /etc/systemd/system/etcd.service
+        mode: "0644"
+      when: inventory_hostname == 'pg-3'
+
+    - name: "Start & enable etcd"
+      ansible.builtin.systemd:
+        name: etcd
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: "Tunggu port client :2379 kebuka (lokal)"
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 2379
+        timeout: 60
+
+# =============================================================================
+# Verify cluster dari pg-1
+# =============================================================================
+- name: "Fase 3a - Verify etcd cluster (dari pg-1)"
+  hosts: pg-1
+  gather_facts: false
+  become: yes
+  tasks:
+    - name: "Tunggu 3/3 endpoint healthy (retry maks 60s)"
+      ansible.builtin.shell: etcdctl --endpoints=http://pg-1:2379,http://pg-2:2379,http://pg-3:2379 endpoint health
+      register: ep_health
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: ep_health.rc == 0
+
+    - name: "etcdctl member list"
+      ansible.builtin.shell: etcdctl --endpoints=http://127.0.0.1:2379 member list -w table
+      register: member_list
+      changed_when: false
+
+    - name: "etcdctl endpoint health (tabel)"
+      ansible.builtin.shell: etcdctl --endpoints=http://pg-1:2379,http://pg-2:2379,http://pg-3:2379 endpoint health -w table
+      register: ep_health_table
+      changed_when: false
+      failed_when: false
+
+    - name: "Tampilkan hasil verify"
+      ansible.builtin.debug:
+        msg:
+          - "=== member list ==="
+          - "{{ member_list.stdout }}"
+          - "=== endpoint health ==="
+          - "{{ ep_health_table.stdout }}"

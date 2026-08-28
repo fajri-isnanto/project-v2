@@ -1,0 +1,110 @@
+---
+# 03b-konfigurasi-patroni.yml — Fase 3b: konfigurasi + bootstrap Patroni
+# Model 3 fase bkpm-ha-v2 — hasil akhir: cluster PG jalan (1 Leader + 2 Replica)
+# TANPA JINJA: patroni.yml statis per node di files/ (patroni.yml.pg-N),
+# dipilih via branching when. Nilai sudah di-render manual per node.
+# Prasyarat: fase 03a (etcd) sudah healthy 3/3.
+# (sumber: pg-03-postgres-patroni.yml lama — bagian config dipisah dari install)
+
+- name: "Fase 3b - Konfigurasi dan bootstrap Patroni (PostgreSQL HA)"
+  hosts: postgres
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: "Cek default cluster 'main' (hasil apt auto-create)"
+      ansible.builtin.stat:
+        path: "{{ patroni_data_dir }}"
+      register: default_cluster
+
+    - name: "Drop default cluster (Patroni yang bootstrap)"
+      ansible.builtin.command: "pg_dropcluster --stop {{ postgres_version }} main"
+      when: default_cluster.stat.exists
+
+    - name: "Mask postgresql.service (lifecycle PG dipegang Patroni)"
+      ansible.builtin.systemd:
+        name: postgresql
+        enabled: false
+        masked: true
+
+    - name: "Buat direktori config Patroni"
+      ansible.builtin.file:
+        path: /etc/patroni
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: "0750"
+
+    - name: "Salin patroni.yml untuk pg-1"
+      ansible.builtin.copy:
+        src: files/patroni.yml.pg-1
+        dest: "{{ patroni_config }}"
+        owner: postgres
+        group: postgres
+        mode: "0640"
+      when: inventory_hostname == 'pg-1'
+
+    - name: "Salin patroni.yml untuk pg-2"
+      ansible.builtin.copy:
+        src: files/patroni.yml.pg-2
+        dest: "{{ patroni_config }}"
+        owner: postgres
+        group: postgres
+        mode: "0640"
+      when: inventory_hostname == 'pg-2'
+
+    - name: "Salin patroni.yml untuk pg-3"
+      ansible.builtin.copy:
+        src: files/patroni.yml.pg-3
+        dest: "{{ patroni_config }}"
+        owner: postgres
+        group: postgres
+        mode: "0640"
+      when: inventory_hostname == 'pg-3'
+
+    - name: "Salin unit systemd patroni.service"
+      ansible.builtin.copy:
+        src: files/patroni.service
+        dest: /etc/systemd/system/patroni.service
+        mode: "0644"
+
+    - name: "Start & enable Patroni (bootstrap pertama via etcd)"
+      ansible.builtin.systemd:
+        name: patroni
+        state: started
+        enabled: true
+        daemon_reload: true
+
+# =============================================================================
+# Verify dari pg-1
+# =============================================================================
+- name: "Fase 3b - Verify cluster Patroni (dari pg-1)"
+  hosts: pg-1
+  gather_facts: false
+  become: true
+  tasks:
+    - name: "Tunggu leader kepilih (retry maks 150s, bootstrap initdb+basebackup)"
+      ansible.builtin.shell: "{{ patroni_venv }}/bin/patronictl -c {{ patroni_config }} list"
+      register: plist
+      changed_when: false
+      retries: 30
+      delay: 5
+      until: plist.rc == 0 and 'Leader' in plist.stdout
+
+    - name: "patronictl list (final)"
+      ansible.builtin.shell: "{{ patroni_venv }}/bin/patronictl -c {{ patroni_config }} list"
+      register: plist_final
+      changed_when: false
+
+    - name: "etcd keys Patroni (/service/{{ patroni_scope }}/)"
+      ansible.builtin.shell: "etcdctl get /service/{{ patroni_scope }}/ --prefix --keys-only"
+      register: etcd_keys
+      changed_when: false
+      failed_when: false
+
+    - name: "Tampilkan hasil verify"
+      ansible.builtin.debug:
+        msg:
+          - "=== patronictl list ==="
+          - "{{ plist_final.stdout }}"
+          - "=== etcd keys ==="
+          - "{{ etcd_keys.stdout }}"

@@ -1,0 +1,47 @@
+---
+# 01-dependensi-os.yml — Fase 1: konfigurasi level OS untuk node RabbitMQ
+# Model 3 fase bkpm-ha-v2 (varian install-only) — hasil akhir: hostname, /etc/hosts, ufw terpasang (TIDAK diaktifkan), limits siap
+# (sumber: rb-01-konfigurasi-os.yml lama, tanpa perubahan perilaku)
+
+- name: "Fase 1 - Siapkan level OS untuk RabbitMQ (rb-1, rb-2, rb-3)"
+  hosts: rabbitmq
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: "Set hostname sesuai nama node"
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: "Pastikan entry ketiga node di /etc/hosts"
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ hostvars[item].ansible_host }} {{ item }}"
+        regexp: "^{{ hostvars[item].ansible_host }} "
+      loop: "{{ groups['rabbitmq'] }}"
+
+    - name: "Pasang ufw (TIDAK diaktifkan — keputusan scope: firewall mati)"
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: "Buat drop-in systemd untuk batas file descriptor RabbitMQ"
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/rabbitmq-server.service.d/limits.conf
+        content: |
+          [Service]
+          LimitNOFILE=65536
+
+    - name: "Muat ulang systemd daemon"
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    - name: "Verifikasi hostname terpasang"
+      ansible.builtin.command: hostname
+      register: hasil_hostname
+      changed_when: false
+
+    - name: "Tampilkan hostname tiap node"
+      ansible.builtin.debug:
+        msg: "Node {{ inventory_hostname }} -> hostname: {{ hasil_hostname.stdout }}"

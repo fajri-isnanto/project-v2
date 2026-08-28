@@ -1,0 +1,97 @@
+---
+# 02-instalasi-core.yml — Fase 2: instalasi inti Valkey (binary resmi valkey.io 9.1.1)
+# Model 3 fase bkpm-ha-v2 (varian install-only client)
+# Hasil akhir: binary terpasang + unit systemd + service di-enable (autostart),
+# BELUM dikonfigurasi cluster (replikasi/sentinel = fase 03, di luar lingkup install-only).
+# Kenapa binary, bukan apt? noble universe cuma punya valkey 7.2.12; valkey.io
+# menyediakan binary artifact noble x86_64 9.1.1 (sha256 di-pin di group_vars).
+# Unit systemd pakai files/valkey.service & files/valkey-sentinel.service (hardened,
+# path /usr/local/bin — cocok dengan lokasi install binary).
+
+- name: "Fase 2 - Instalasi inti Valkey 9.1.1 (binary resmi valkey.io)"
+  hosts: valkey
+  become: yes
+  gather_facts: no
+  tasks:
+    - name: "Unduh binary Valkey {{ valkey_version }} (noble x86_64, sha256 diverifikasi)"
+      ansible.builtin.get_url:
+        url: "{{ valkey_bin_url }}"
+        dest: "/tmp/{{ valkey_tarball }}"
+        checksum: "sha256:{{ valkey_sha256 }}"
+        mode: "0644"
+        timeout: 300
+
+    - name: "Ekstrak tarball binary"
+      ansible.builtin.unarchive:
+        src: "/tmp/{{ valkey_tarball }}"
+        dest: /tmp
+        remote_src: true
+        creates: "/tmp/{{ valkey_extract_dir }}"
+
+    - name: "Pasang binary Valkey ke /usr/local/bin"
+      ansible.builtin.copy:
+        src: "/tmp/{{ valkey_extract_dir }}/bin/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        remote_src: true
+        mode: "0755"
+      loop:
+        - valkey-server
+        - valkey-sentinel
+        - valkey-cli
+        - valkey-benchmark
+        - valkey-check-rdb
+        - valkey-check-aof
+
+    - name: "Salin unit systemd valkey-server (hardened, dari files/)"
+      ansible.builtin.copy:
+        src: files/valkey.service
+        dest: /etc/systemd/system/valkey.service
+        owner: root
+        group: root
+        mode: "0644"
+        backup: yes
+
+    - name: "Salin unit systemd valkey-sentinel (hardened, dari files/)"
+      ansible.builtin.copy:
+        src: files/valkey-sentinel.service
+        dest: /etc/systemd/system/valkey-sentinel.service
+        owner: root
+        group: root
+        mode: "0644"
+        backup: yes
+
+    - name: "Aktifkan autostart valkey-server"
+      ansible.builtin.systemd:
+        name: valkey-server
+        enabled: yes
+        daemon_reload: yes
+
+    - name: "Aktifkan autostart valkey-sentinel"
+      ansible.builtin.systemd:
+        name: valkey-sentinel
+        enabled: yes
+
+    - name: "Bersihkan tarball dan direktori ekstrak"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/{{ valkey_tarball }}"
+        - "/tmp/{{ valkey_extract_dir }}"
+
+    # ---------- Verifikasi ----------
+    - name: "Verifikasi binary valkey-server"
+      ansible.builtin.command: /usr/local/bin/valkey-server --version
+      register: versi_valkey
+      changed_when: false
+
+    - name: "Verifikasi status autostart service"
+      ansible.builtin.command: systemctl is-enabled valkey-server valkey-sentinel
+      register: status_service
+      changed_when: false
+
+    - name: "Tampilkan hasil verifikasi"
+      ansible.builtin.debug:
+        msg:
+          - "Binary: {{ versi_valkey.stdout }}"
+          - "Autostart: {{ status_service.stdout }}"

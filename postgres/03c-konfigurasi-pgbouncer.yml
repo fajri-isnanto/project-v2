@@ -1,0 +1,101 @@
+---
+# 03c-konfigurasi-pgbouncer.yml — Fase 3c: konfigurasi + start PgBouncer
+# Model 3 fase bkpm-ha-v2 — hasil akhir: pool layer jalan (koneksi :6432 tembus PG)
+# TANPA JINJA: pgbouncer.ini statis di files/ (sama semua node).
+# AUTH: PG 17 default scram-sha-256. userlist.txt berisi SCRAM SECRET persis
+# dari pg_authid.rolpassword (ditarik runtime dari PG lokal — bukan plaintext).
+# Prasyarat: fase 03b (Patroni) sudah elect leader — PG jalan di tiap node.
+# (sumber: pg-04-pgbouncer.yml lama — bagian config dipisah dari install)
+
+- name: "Fase 3c - Konfigurasi dan start PgBouncer"
+  hosts: postgres
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: "Ambil SCRAM secret user 'postgres' dari pg_authid (bukan plaintext)"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql -p 5432 -tAc
+        "SELECT rolpassword FROM pg_authid WHERE rolname='postgres'"
+      register: scram_postgres
+      changed_when: false
+
+    - name: "Assert SCRAM secret ketemu (bukan kosong)"
+      ansible.builtin.assert:
+        that:
+          - scram_postgres.stdout | trim | length > 0
+          - "'SCRAM-SHA-256' in scram_postgres.stdout"
+        fail_msg: "SCRAM secret postgres ga ketemu — cek Patroni/PG jalan di node ini"
+
+    - name: "Tulis userlist.txt (auth PgBouncer -> PG)"
+      ansible.builtin.copy:
+        content: "\"postgres\" \"{{ scram_postgres.stdout | trim }}\"\n"
+        dest: /etc/pgbouncer/userlist.txt
+        owner: postgres
+        group: postgres
+        mode: "0640"
+
+    - name: "Salin pgbouncer.ini (statis, sama semua node)"
+      ansible.builtin.copy:
+        src: files/pgbouncer.ini
+        dest: /etc/pgbouncer/pgbouncer.ini
+        owner: postgres
+        group: postgres
+        mode: "0640"
+
+    - name: "Start & enable pgbouncer"
+      ansible.builtin.systemd:
+        name: pgbouncer
+        state: restarted
+        enabled: true
+        daemon_reload: true
+
+# =============================================================================
+# Verify dari pg-1
+# =============================================================================
+- name: "Fase 3c - Verify PgBouncer (dari pg-1)"
+  hosts: pg-1
+  gather_facts: false
+  become: true
+  tasks:
+    - name: "Tunggu port 6432 kebuka"
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6432
+        timeout: 30
+
+    - name: "Ambil password superuser dari patroni.yml (buat .pgpass verify)"
+      ansible.builtin.slurp:
+        src: /etc/patroni/patroni.yml
+      register: patroni_cfg
+
+    - name: "Tulis .pgpass user postgres (biar psql ga prompt, scram non-interaktif)"
+      ansible.builtin.copy:
+        content: "127.0.0.1:6432:*:postgres:{{ (patroni_cfg.content | b64decode | from_yaml).postgresql.authentication.superuser.password }}\n"
+        dest: /var/lib/postgresql/.pgpass
+        owner: postgres
+        group: postgres
+        mode: "0600"
+
+    - name: "Test koneksi lewat PgBouncer (harus nembus PG backend)"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql
+        -h 127.0.0.1 -p 6432 -U postgres -d postgres
+        -tAc "SELECT current_user || ' @ port ' || inet_server_port();"
+      register: pg_test
+      changed_when: false
+
+    - name: "SHOW POOLS (bukti pool aktif)"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql
+        -h 127.0.0.1 -p 6432 -U postgres -d pgbouncer
+        -tAc "SHOW POOLS;"
+      register: pg_pools
+      changed_when: false
+
+    - name: "Tampilkan hasil verify"
+      ansible.builtin.debug:
+        msg:
+          - "=== koneksi via PgBouncer ==="
+          - "{{ pg_test.stdout }}"
+          - "=== SHOW POOLS ==="
+          - "{{ pg_pools.stdout }}"

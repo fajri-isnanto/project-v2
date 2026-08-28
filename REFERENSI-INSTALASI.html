@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Referensi Instalasi — BKPM HA Stack</title>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:#f5f6f8; color:#1a202c; margin:0; padding:24px; }
+  .wrap { max-width:1100px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:#4a5568; font-size:13px; margin-bottom:24px; }
+  h2 { font-size:16px; margin:28px 0 10px; padding-top:16px; border-top:2px solid #e2e8f0; }
+  h3 { font-size:13.5px; margin:18px 0 8px; color:#2d3748; }
+  table { width:100%; border-collapse:collapse; background:#fff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; font-size:13px; margin-bottom:8px; }
+  th { background:#f1f5f9; text-align:left; padding:8px 12px; font-weight:600; color:#334155; border-bottom:1px solid #e2e8f0; white-space:nowrap; }
+  td { padding:7px 12px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
+  tr:last-child td { border-bottom:none; }
+  tr:nth-child(even) td { background:#f8fafc; }
+  code { background:#eef2f7; padding:1px 6px; border-radius:4px; font-size:12px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; color:#0f172a; }
+  pre { background:#0f172a; color:#e2e8f0; padding:14px 16px; border-radius:8px; font-size:12.5px; line-height:1.6; overflow-x:auto; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .note { background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:8px 14px; font-size:12.5px; color:#78350f; margin:8px 0 16px; }
+  .foot { color:#94a3b8; font-size:12px; margin-top:28px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Referensi Instalasi — BKPM HA Stack (bkpm-ha-v2)</h1>
+  <p>Dokumen referensi tunggal untuk stack HA BKPM: PostgreSQL, Valkey, RabbitMQ.</p>
+  <p>Sumber: playbook <code>bkpm-ha-v2</code> + docs Obsidian <code>mastersystem/bkpm/</code>.</p>
+  <h2>1. Node &amp; IP</h2>
+  <table>
+    <tr><th>Node</th><th>IP</th><th>VMID (Proxmox)</th><th>Peran</th></tr>
+    <tr><td>pg-1</td><td>192.168.1.50</td><td>109</td><td>PostgreSQL Leader (dinamis)</td></tr>
+    <tr><td>pg-2</td><td>192.168.1.51</td><td>110</td><td>PostgreSQL Sync Standby</td></tr>
+    <tr><td>pg-3</td><td>192.168.1.52</td><td>111</td><td>PostgreSQL Replica</td></tr>
+    <tr><td>vk-1</td><td>192.168.1.53</td><td>112</td><td>Valkey PRIMARY</td></tr>
+    <tr><td>vk-2</td><td>192.168.1.54</td><td>113</td><td>Valkey REPLICA</td></tr>
+    <tr><td>vk-3</td><td>192.168.1.55</td><td>114</td><td>Valkey REPLICA</td></tr>
+    <tr><td>rb-1</td><td>192.168.1.56</td><td>116</td><td>RabbitMQ (basis cluster)</td></tr>
+    <tr><td>rb-2</td><td>192.168.1.57</td><td>117</td><td>RabbitMQ</td></tr>
+    <tr><td>rb-3</td><td>192.168.1.58</td><td>118</td><td>RabbitMQ</td></tr>
+  </table>
+  <p>OS semua node: <b>Ubuntu 24.04</b> (Noble Numbat).</p>
+  <h2>2. Versi Paket</h2>
+  <table>
+    <tr><th>Komponen</th><th>Versi</th><th>Cara Install</th><th>Node</th></tr>
+    <tr><td>PostgreSQL</td><td>17</td><td>apt (repo PGDG)</td><td>pg-1/2/3</td></tr>
+    <tr><td>postgresql-client</td><td>17</td><td>apt (repo PGDG)</td><td>pg-1/2/3</td></tr>
+    <tr><td>etcd</td><td>3.5.32</td><td>binary GitHub → /usr/local/bin</td><td>pg-1/2/3</td></tr>
+    <tr><td>Patroni</td><td>latest (pip, tidak di-pin)</td><td>pip venv <code>/opt/patroni-venv</code> (patroni[etcd3])</td><td>pg-1/2/3</td></tr>
+    <tr><td>psycopg2-binary</td><td>latest (pip)</td><td>pip venv <code>/opt/patroni-venv</code></td><td>pg-1/2/3</td></tr>
+    <tr><td>PgBouncer</td><td>versi apt Ubuntu 24.04 (live: 1.25.2)</td><td>apt</td><td>pg-1/2/3</td></tr>
+    <tr><td>Valkey</td><td>9.1.1</td><td>binary resmi valkey.io (noble x86_64) → /usr/local/bin</td><td>vk-1/2/3</td></tr>
+    <tr><td>RabbitMQ Server</td><td>4.2.9-1 (LTS, pin exact)</td><td>apt (repo Team RabbitMQ deb1)</td><td>rb-1/2/3</td></tr>
+    <tr><td>Erlang</td><td>1:27.3.4.16-1 (OTP 27.x, pin exact)</td><td>apt (repo Team RabbitMQ Erlang)</td><td>rb-1/2/3</td></tr>
+  </table>
+  <div class="note">Catatan: versi di-pin untuk etcd (3.5.32), Valkey (9.1.1), RabbitMQ (4.2.9-1), Erlang (1:27.3.4.16-1) — selain itu mengikuti repo pada saat eksekusi. Valkey: binary resmi valkey.io 9.1.1 (noble x86_64) — apt noble universe cuma punya 7.2.12, makanya pakai binary artifact (sha256 di-pin). Lab yang sudah jalan tetap 9.0.5 (compile). Patroni dipasang via pip dalam venv (PEP 668 Ubuntu 24.04 wajib venv).</div>
+  <h2>3. Daftar Paket yang Diinstal</h2>
+  <p>Sumber: task <code>ansible.builtin.apt</code> / <code>pip</code> / <code>get_url</code> di playbook <code>01-dependensi-os.yml</code> &amp; <code>02-instalasi-core.yml</code> tiap stack.</p>
+  <h3>PostgreSQL (pg-1/2/3) — <code>postgres/</code></h3>
+  <p><b>Fase 1 — paket dasar OS (apt, repo Ubuntu 24.04):</b></p>
+  <table>
+    <tr><th>Paket</th><th>Keterangan</th></tr>
+    <tr><td>curl, wget</td><td>Tools unduh</td></tr>
+    <tr><td>ca-certificates, gnupg</td><td>Trust chain + verifikasi key repo</td></tr>
+    <tr><td>python3-pip, python3-venv</td><td>Dasar venv Patroni (PEP 668)</td></tr>
+    <tr><td>libpq-dev, python3-dev</td><td>Header/kebutuhan build psycopg2</td></tr>
+    <tr><td>build-essential</td><td>Compiler &amp; build tools</td></tr>
+  </table>
+  <p><b>Fase 2 — paket inti:</b></p>
+  <table>
+    <tr><th>Paket</th><th>Sumber</th><th>Keterangan</th></tr>
+    <tr><td>postgresql-17</td><td>apt (repo PGDG <code>noble-pgdg</code>)</td><td>Server DB</td></tr>
+    <tr><td>postgresql-client-17</td><td>apt (repo PGDG)</td><td>Client <code>psql</code></td></tr>
+    <tr><td>etcd + etcdctl 3.5.32</td><td>binary GitHub → <code>/usr/local/bin</code></td><td>DCS / leader lock</td></tr>
+    <tr><td>patroni[etcd3]</td><td>pip venv <code>/opt/patroni-venv</code></td><td>HA manager (Python)</td></tr>
+    <tr><td>psycopg2-binary</td><td>pip venv <code>/opt/patroni-venv</code></td><td>Driver Python → PostgreSQL</td></tr>
+    <tr><td>pgbouncer</td><td>apt (repo Ubuntu)</td><td>Connection pool</td></tr>
+  </table>
+  <div class="note">Autostart fase 2: hanya <code>pgbouncer</code> (unit dari package apt). etcd &amp; Patroni unit-nya node-specific + butuh config file (03a/03b) — enable/start di fase konfigurasi cluster.</div>
+  <h3>Valkey (vk-1/2/3) — <code>valkey/</code></h3>
+  <p><b>Fase 1 — persiapan (tanpa paket build — install binary):</b></p>
+  <table>
+    <tr><th>Item</th><th>Keterangan</th></tr>
+    <tr><td>user &amp; grup <code>valkey</code></td><td>System user, shell nologin</td></tr>
+    <tr><td>direktori data</td><td><code>/var/lib/valkey</code>, <code>/var/log/valkey</code>, <code>/var/run/valkey</code>, <code>/etc/valkey</code></td></tr>
+  </table>
+  <p><b>Fase 2 — paket inti (binary resmi valkey.io 9.1.1 → <code>/usr/local/bin</code>):</b></p>
+  <table>
+    <tr><th>Paket</th><th>Keterangan</th></tr>
+    <tr><td>valkey-server</td><td>Server (primary/replica) — versi 9.1.1</td></tr>
+    <tr><td>valkey-sentinel</td><td>Sentinel (failover)</td></tr>
+    <tr><td>valkey-cli, valkey-benchmark, valkey-check-{rdb,aof}</td><td>Utilitas client &amp; tool</td></tr>
+  </table>
+  <div class="note">Unduh dari <code>download.valkey.io</code> (sha256 di-pin di <code>group_vars/valkey.yml</code>), ekstrak, binary ke <code>/usr/local/bin</code>. Unit systemd dari <code>valkey/files/</code> (<code>valkey.service</code>, <code>valkey-sentinel.service</code> — hardened, proven di lab). Kedua service di-ENABLE di fase 2 (autostart), belum di-start — config cluster = fase 03.</div>
+  <h3>RabbitMQ (rb-1/2/3) — <code>rabbitmq/</code></h3>
+  <p><b>Fase 1 — paket OS (apt, repo Ubuntu 24.04):</b></p>
+  <table>
+    <tr><th>Paket</th><th>Keterangan</th></tr>
+    <tr><td>ufw</td><td>Firewall (port 22/4369/25672/5672/15672 dibuka)</td></tr>
+  </table>
+  <p><b>Fase 2 — paket inti:</b></p>
+  <table>
+    <tr><th>Paket</th><th>Sumber</th><th>Keterangan</th></tr>
+    <tr><td>curl, gnupg, ca-certificates</td><td>apt (repo Ubuntu)</td><td>Prasyarat import signing key</td></tr>
+    <tr><td>rabbitmq-server</td><td>apt (repo Team RabbitMQ, pin <code>4.2.9-1</code>)</td><td>Server (default_queue_type=quorum)</td></tr>
+    <tr><td>erlang-base, erlang-crypto, erlang-ssl, dll (17 paket inti)</td><td>apt (repo Team RabbitMQ Erlang, pin <code>1:27.3.4.16-1</code>)</td><td>Runtime RabbitMQ (OTP 27.x)</td></tr>
+    <tr><td>rabbitmq_management</td><td>plugin (<code>rabbitmq-plugins enable</code>)</td><td>UI &amp; API port 15672</td></tr>
+  </table>
+  <div class="note">Signing key Team RabbitMQ (fingerprint <code>0A9AF2115F4687BD29803A206B73A36E6026DFCA</code>) → dearmor ke <code>/usr/share/keyrings/com.rabbitmq.team.gpg</code>, repo di <code>/etc/apt/sources.list.d/rabbitmq-{erlang,server}.list</code>. Repo Cloudsmith TIDAK dipakai — erlang 27.x &amp; rabbitmq-server 4.2.9 tidak tersedia di sana. <code>rabbitmq-server</code> di-ENABLE di fase 2 (autostart). UFW terpasang tapi TIDAK diaktifkan (firewall mati — keputusan scope install-only).</div>
+  <h2>4. URL Repository &amp; Source</h2>
+  <table>
+    <tr><th>Komponen</th><th>URL</th><th>Keterangan</th></tr>
+    <tr><td>PGDG</td><td><code>http://apt.postgresql.org/pub/repos/apt</code> (suitename <code>-pgdg</code>)</td><td>Repo PostgreSQL 17</td></tr>
+    <tr><td>PGDG key</td><td><code>https://www.postgresql.org/media/keys/ACCC4CF8.asc</code> → dearmor ke <code>/usr/share/keyrings/pgdg.gpg</code></td><td>Signing key PGDG</td></tr>
+    <tr><td>etcd</td><td><code>https://github.com/etcd-io/etcd/releases/download/v3.5.32/etcd-v3.5.32-linux-amd64.tar.gz</code></td><td>Binary release GitHub</td></tr>
+    <tr><td>Patroni</td><td>PyPI via pip: <code>patroni[etcd3]</code>, <code>psycopg2-binary</code></td><td>Dalam venv <code>/opt/patroni-venv</code></td></tr>
+    <tr><td>Valkey</td><td><code>https://download.valkey.io/releases/valkey-9.1.1-noble-x86_64.tar.gz</code></td><td>Binary artifact resmi valkey.io (noble x86_64, sha256 di-pin)</td></tr>
+    <tr><td>Erlang</td><td><code>https://deb1.rabbitmq.com/rabbitmq-erlang/ubuntu/noble noble main</code> (mirror: deb2)</td><td>Repo Team RabbitMQ (resmi)</td></tr>
+    <tr><td>RabbitMQ</td><td><code>https://deb1.rabbitmq.com/rabbitmq-server/ubuntu/noble noble main</code> (mirror: deb2)</td><td>Repo Team RabbitMQ (resmi)</td></tr>
+    <tr><td>Signing key</td><td><code>https://keys.openpgp.org/vks/v1/by-fingerprint/0A9AF2115F4687BD29803A206B73A36E6026DFCA</code></td><td>dearmor → <code>/usr/share/keyrings/com.rabbitmq.team.gpg</code></td></tr>
+  </table>
+  <h2>5. Port yang Digunakan</h2>
+  <h3>PostgreSQL (pg-1/2/3)</h3>
+  <table>
+    <tr><th>Port</th><th>Service</th><th>Keterangan</th></tr>
+    <tr><td>5432</td><td>PostgreSQL</td><td>Backend DB</td></tr>
+    <tr><td>8008</td><td>Patroni REST API</td><td>Health-check <code>/primary</code>, <code>/replica</code></td></tr>
+    <tr><td>2379</td><td>etcd client</td><td>DCS / leader lock</td></tr>
+    <tr><td>2380</td><td>etcd peer</td><td>Komunikasi antar node etcd</td></tr>
+    <tr><td>6432</td><td>PgBouncer</td><td>Connection pool (client masuk)</td></tr>
+    <tr><td>100</td><td>HAProxy VIP (Phase 5)</td><td>192.168.1.100 — belum dibangun</td></tr>
+  </table>
+  <h3>Valkey (vk-1/2/3)</h3>
+  <table>
+    <tr><th>Port</th><th>Service</th><th>Keterangan</th></tr>
+    <tr><td>6379</td><td>valkey-server</td><td>Primary &amp; replica (replikasi)</td></tr>
+    <tr><td>26379</td><td>valkey-sentinel</td><td>Monitoring + failover (quorum=2)</td></tr>
+  </table>
+  <h3>RabbitMQ (rb-1/2/3)</h3>
+  <table>
+    <tr><th>Port</th><th>Service</th><th>Keterangan</th></tr>
+    <tr><td>4369</td><td>EPMD</td><td>Discovery antar node</td></tr>
+    <tr><td>5672</td><td>AMQP</td><td>Koneksi client (producer/consumer)</td></tr>
+    <tr><td>15672</td><td>Management</td><td>UI &amp; API management</td></tr>
+    <tr><td>25672</td><td>Erlang cluster</td><td>Komunikasi cluster (distribution)</td></tr>
+    <tr><td>22</td><td>SSH</td><td>Dibuka di UFW agar tidak putus</td></tr>
+  </table>
+  <h2>6. Path File Penting</h2>
+  <h3>PostgreSQL (pg-1/2/3)</h3>
+  <table>
+    <tr><th>Path</th><th>Fungsi</th></tr>
+    <tr><td><code>/etc/patroni/patroni.yml</code></td><td>Config Patroni (per node, statis)</td></tr>
+    <tr><td><code>/opt/patroni-venv/bin/patroni</code></td><td>Binary Patroni</td></tr>
+    <tr><td><code>/opt/patroni-venv/bin/patronictl</code></td><td>CLI manajemen cluster (<code>-c /etc/patroni/patroni.yml list</code>)</td></tr>
+    <tr><td><code>/var/lib/postgresql/17/main</code></td><td>Data dir PostgreSQL (dibuat Patroni)</td></tr>
+    <tr><td><code>/usr/lib/postgresql/17/bin</code></td><td>Bin dir PostgreSQL (psql, pg_dropcluster)</td></tr>
+    <tr><td><code>/etc/pgbouncer/pgbouncer.ini</code></td><td>Config PgBouncer (statis)</td></tr>
+    <tr><td><code>/etc/pgbouncer/userlist.txt</code></td><td>SCRAM secret (ditarik runtime dari pg_authid)</td></tr>
+    <tr><td><code>/etc/systemd/system/etcd.service</code></td><td>Unit etcd (statis per node)</td></tr>
+    <tr><td><code>/etc/systemd/system/patroni.service</code></td><td>Unit Patroni</td></tr>
+    <tr><td><code>/var/lib/etcd</code></td><td>Data dir etcd</td></tr>
+    <tr><td><code>/usr/local/bin/etcd</code>, <code>etcdctl</code></td><td>Binary etcd</td></tr>
+    <tr><td><code>/var/lib/postgresql/.pgpass</code></td><td>Credential verify (dibuat playbook 03c)</td></tr>
+  </table>
+  <h3>Valkey (vk-1/2/3)</h3>
+  <table>
+    <tr><th>Path</th><th>Fungsi</th></tr>
+    <tr><td><code>/etc/valkey/valkey.conf</code></td><td>Config server (primary vs replica)</td></tr>
+    <tr><td><code>/etc/valkey/sentinel.conf</code></td><td>Config sentinel (sama semua node, writable oleh user valkey)</td></tr>
+    <tr><td><code>/var/lib/valkey/</code></td><td>Data: <code>dump.rdb</code> (RDB) + <code>appendonly.aof</code> (AOF)</td></tr>
+    <tr><td><code>/var/log/valkey/valkey.log</code></td><td>Log valkey-server</td></tr>
+    <tr><td><code>/var/log/valkey/sentinel.log</code></td><td>Log sentinel</td></tr>
+    <tr><td><code>/usr/local/bin/valkey-server</code>, <code>valkey-cli</code>, <code>valkey-sentinel</code></td><td>Binary (dari valkey.io)</td></tr>
+    <tr><td><code>/etc/systemd/system/valkey.service</code></td><td>Unit valkey-server (dari files/, hardened)</td></tr>
+    <tr><td><code>/etc/systemd/system/valkey-sentinel.service</code></td><td>Unit sentinel (dari files/, hardened)</td></tr>
+  </table>
+  <h3>RabbitMQ (rb-1/2/3)</h3>
+  <table>
+    <tr><th>Path</th><th>Fungsi</th></tr>
+    <tr><td><code>/etc/rabbitmq/rabbitmq.conf</code></td><td>Config (default_queue_type = quorum)</td></tr>
+    <tr><td><code>/var/lib/rabbitmq/.erlang.cookie</code></td><td>Erlang cookie (wajib identik antar node, mode 0400)</td></tr>
+    <tr><td><code>/var/log/rabbitmq/</code></td><td>Log RabbitMQ</td></tr>
+    <tr><td><code>/etc/systemd/system/rabbitmq-server.service.d/limits.conf</code></td><td>Drop-in LimitNOFILE=65536</td></tr>
+    <tr><td><code>/usr/lib/rabbitmq/bin/rabbitmqctl</code></td><td>CLI (cluster_status, join_cluster, dll)</td></tr>
+  </table>
+  <h3>Ansible (controller)</h3>
+  <table>
+    <tr><th>Path</th><th>Fungsi</th></tr>
+    <tr><td><code>/root/ansible-automation/bkpm-ha-v2/</code></td><td>Playbook v2 (model 3 fase, tanpa jinja)</td></tr>
+    <tr><td><code>/root/ansible-automation/bkpm-ha-v2/inventory.ini</code></td><td>Inventory v2 (self-contained)</td></tr>
+    <tr><td><code>/root/ansible-automation/bkpm-ha-v2/group_vars/</code></td><td>Variabel per project</td></tr>
+    <tr><td><code>/root/ansible-automation/</code></td><td>Playbook lama (referensi, tidak disentuh)</td></tr>
+  </table>
+  <h2>7. Urutan Eksekusi Playbook (v2)</h2>
+  <pre># PostgreSQL (wajib urut)
+01-dependensi-os → 02-instalasi-core → 03a-etcd → 03b-patroni → 03c-pgbouncer
+
+# Valkey (wajib urut)
+01-dependensi-os → 02-instalasi-core → 03-konfigurasi
+
+# RabbitMQ (wajib urut)
+01-dependensi-os → 02-instalasi-core → 03-konfigurasi</pre>
+  <p>Verifikasi tiap fase:</p>
+  <table>
+    <tr><th>Fase</th><th>Verifikasi</th></tr>
+    <tr><td>02 (install)</td><td>Paket apt (<code>dpkg-query</code>: postgresql-17, pgbouncer, rabbitmq-server, erlang) + <code>apt-cache madison</code> (rabbitmq-server, erlang) + binary versi (<code>etcd --version</code>, <code>psql --version</code>, <code>patroni --version</code>, <code>valkey-server --version</code>, <code>rabbitmqctl version</code>) + autostart (<code>systemctl is-enabled</code> pgbouncer, valkey-server, valkey-sentinel, rabbitmq-server)</td></tr>
+    <tr><td>03 (config)</td><td>Cluster jalan: <code>patronictl list</code> (1 Leader), <code>valkey-cli -p 26379 sentinel get-master-addr-by-name mymaster</code>, <code>rabbitmqctl cluster_status</code></td></tr>
+  </table>
+  <p class="foot">Dibuat: 2026-08-27 · bersumber dari bkpm-ha-v2 (playbook aktif) — playbook lama di <code>/root/ansible-automation/</code> tetap referensi.</p>
+</div>
+</body>
+</html>

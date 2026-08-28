@@ -1,0 +1,33 @@
+# Valkey Server — systemd unit (statis, tanpa Jinja)
+# Copy ke /etc/systemd/system/valkey.service
+
+[Unit]
+Description=Valkey In-Memory Data Store
+After=network.target
+
+[Service]
+Type=notify
+User=valkey
+Group=valkey
+ExecStart=/usr/local/bin/valkey-server /etc/valkey/valkey.conf
+ExecStop=/usr/local/bin/valkey-cli shutdown
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+TimeoutStartSec=10
+TimeoutStopSec=10
+
+# Direktori yang dimiliki valkey user
+RuntimeDirectory=valkey
+LogsDirectory=valkey
+CacheDirectory=valkey
+
+# Hardening
+# /etc/valkey writable: sentinel kirim CONFIG REWRITE saat failover (server user=valkey)
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/etc/valkey /var/lib/valkey /var/log/valkey /var/run/valkey
+
+[Install]
+WantedBy=multi-user.target

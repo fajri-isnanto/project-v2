@@ -1,0 +1,123 @@
+---
+# 02-instalasi-core.yml — Fase 2: instalasi inti RabbitMQ + Erlang
+# Model 3 fase bkpm-ha-v2 (varian install-only client)
+# Hasil akhir: rabbitmq-server + plugin management terpasang, autostart enabled
+# Constraint: TANPA tuning, TANPA DLQ, TANPA policy per queue
+# Konfigurasi (rabbitmq.conf, vhost, user, cluster) = fase 03 — TIDAK di sini
+# REPO: Team RabbitMQ resmi (deb1.rabbitmq.com) — Cloudsmith TIDAK dipakai karena
+#   erlang 27.x & rabbitmq-server 4.2.9 tidak tersedia di repo Cloudsmith.
+# VERSI: pin exact di group_vars — rabbitmq-server 4.2.9-1, erlang 1:27.3.4.16-1.
+#   Paket erlang memakai daftar inti dari docs resmi (bukan metapackage, biar ramping).
+# (sumber: rb-02-instalasi-rabbitmq.yml lama, bagian config dipindah ke fase 03)
+
+- name: "Fase 2 - Instalasi inti RabbitMQ 4.2.9-1 + Erlang OTP 27 (repo Team RabbitMQ)"
+  hosts: rabbitmq
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: "Pasang paket prasyarat (curl, gnupg, ca-certificates)"
+      ansible.builtin.apt:
+        name:
+          - curl
+          - gnupg
+          - ca-certificates
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: "Unduh signing key Team RabbitMQ (keys.openpgp.org)"
+      ansible.builtin.get_url:
+        url: "https://keys.openpgp.org/vks/v1/by-fingerprint/0A9AF2115F4687BD29803A206B73A36E6026DFCA"
+        dest: /usr/share/keyrings/com.rabbitmq.team.asc
+        mode: "0644"
+
+    - name: "Dearmor signing key (signed-by butuh binary keyring)"
+      ansible.builtin.shell: "gpg --dearmor --yes -o /usr/share/keyrings/com.rabbitmq.team.gpg /usr/share/keyrings/com.rabbitmq.team.asc"
+      args:
+        creates: /usr/share/keyrings/com.rabbitmq.team.gpg
+
+    - name: "Tambah repository Erlang Team RabbitMQ ({{ ansible_distribution_release }})"
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/com.rabbitmq.team.gpg] https://deb1.rabbitmq.com/rabbitmq-erlang/ubuntu/{{ ansible_distribution_release }} {{ ansible_distribution_release }} main"
+        filename: rabbitmq-erlang
+
+    - name: "Tambah repository RabbitMQ Server Team RabbitMQ ({{ ansible_distribution_release }})"
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/com.rabbitmq.team.gpg] https://deb1.rabbitmq.com/rabbitmq-server/ubuntu/{{ ansible_distribution_release }} {{ ansible_distribution_release }} main"
+        filename: rabbitmq-server
+
+    - name: "Pasang Erlang/OTP {{ erlang_version }} (pin exact, repo Team RabbitMQ)"
+      ansible.builtin.apt:
+        name:
+          - "erlang-base={{ erlang_version }}"
+          - "erlang-asn1={{ erlang_version }}"
+          - "erlang-crypto={{ erlang_version }}"
+          - "erlang-eldap={{ erlang_version }}"
+          - "erlang-ftp={{ erlang_version }}"
+          - "erlang-inets={{ erlang_version }}"
+          - "erlang-mnesia={{ erlang_version }}"
+          - "erlang-os-mon={{ erlang_version }}"
+          - "erlang-parsetools={{ erlang_version }}"
+          - "erlang-public-key={{ erlang_version }}"
+          - "erlang-runtime-tools={{ erlang_version }}"
+          - "erlang-snmp={{ erlang_version }}"
+          - "erlang-ssl={{ erlang_version }}"
+          - "erlang-syntax-tools={{ erlang_version }}"
+          - "erlang-tftp={{ erlang_version }}"
+          - "erlang-tools={{ erlang_version }}"
+          - "erlang-xmerl={{ erlang_version }}"
+        state: present
+        update_cache: yes
+
+    - name: "Pasang RabbitMQ Server {{ rabbitmq_version }} (LTS, pin exact)"
+      ansible.builtin.apt:
+        name: "rabbitmq-server={{ rabbitmq_version }}"
+        state: present
+
+    - name: "Aktifkan plugin management (UI & API)"
+      ansible.builtin.command: rabbitmq-plugins enable rabbitmq_management
+      register: hasil_plugin
+      changed_when: "'Plugin configuration unchanged' not in hasil_plugin.stdout"
+
+    - name: "Aktifkan autostart rabbitmq-server"
+      ansible.builtin.systemd:
+        name: rabbitmq-server
+        enabled: yes
+        daemon_reload: yes
+
+    - name: "Verifikasi versi RabbitMQ"
+      ansible.builtin.command: rabbitmqctl version
+      register: versi_rabbitmq
+      changed_when: false
+
+    - name: "Tampilkan versi RabbitMQ"
+      ansible.builtin.debug:
+        msg: "RabbitMQ {{ versi_rabbitmq.stdout }} terpasang di {{ inventory_hostname }}"
+
+    - name: "Kumpulkan fakta paket apt (rabbitmq, erlang)"
+      ansible.builtin.package_facts:
+        manager: apt
+
+    - name: "Verifikasi paket terpasang (nama + versi)"
+      ansible.builtin.debug:
+        msg:
+          - "rabbitmq-server: {{ ansible_facts.packages['rabbitmq-server'][0].version }}"
+          - "erlang-base: {{ ansible_facts.packages['erlang-base'][0].version }}"
+
+    - name: "Periksa versi yang tersedia di repo (apt-cache madison)"
+      ansible.builtin.command: apt-cache madison rabbitmq-server erlang-base
+      register: hasil_madison
+      changed_when: false
+
+    - name: "Tampilkan hasil apt-cache madison"
+      ansible.builtin.debug:
+        msg: "{{ hasil_madison.stdout_lines }}"
+
+    - name: "Verifikasi status autostart rabbitmq-server"
+      ansible.builtin.command: systemctl is-enabled rabbitmq-server
+      register: status_rabbitmq
+      changed_when: false
+
+    - name: "Tampilkan status autostart rabbitmq-server"
+      ansible.builtin.debug:
+        msg: "rabbitmq-server autostart: {{ status_rabbitmq.stdout }}"

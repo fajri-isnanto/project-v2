@@ -1,0 +1,45 @@
+---
+# 01-dependensi-os.yml — Fase 1: dependensi level OS untuk PostgreSQL HA
+# Model 3 fase bkpm-ha-v2 — hasil akhir: paket dasar + resolusi nama node siap
+# CATATAN: fase hygiene (machine-id, SSH key) TIDAK termasuk — keputusan diskusi
+# (sumber: pg-02/03/04 lama — bagian OS deps dipisah)
+
+- name: "Fase 1 - Siapkan dependensi OS untuk PostgreSQL HA (pg-1/2/3)"
+  hosts: postgres
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: "Perbarui cache apt"
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: "Pasang paket dasar OS"
+      ansible.builtin.apt:
+        name:
+          - curl
+          - wget
+          - ca-certificates
+          - gnupg
+          - python3-pip
+          - python3-venv
+          - libpq-dev
+          - python3-dev
+          - build-essential
+        state: present
+
+    - name: "Pastikan entry hostname ketiga node di /etc/hosts (resolusi nama etcd/patroni)"
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ hostvars[item].ansible_host }} {{ item }}"
+        regexp: "^{{ hostvars[item].ansible_host }} "
+      loop: "{{ groups['postgres'] }}"
+
+    - name: "Verifikasi python3 tersedia (dasar venv Patroni)"
+      ansible.builtin.command: python3 --version
+      register: versi_python
+      changed_when: false
+
+    - name: "Tampilkan versi python3"
+      ansible.builtin.debug:
+        msg: "{{ versi_python.stdout }} di {{ inventory_hostname }}"

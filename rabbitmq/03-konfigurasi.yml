@@ -1,0 +1,100 @@
+---
+# 03-konfigurasi.yml — Fase 3: konfigurasi + pembentukan cluster RabbitMQ
+# Model 3 fase bkpm-ha-v2 — hasil akhir: cluster 3 node jalan + vhost/user siap pakai
+# Alur: rabbitmq.conf -> restart -> vhost & user -> erlang cookie -> join cluster -> verifikasi
+# serial: 1 = node demi node, supaya join cluster tidak race (rb-2 selesai dulu, baru rb-3)
+# (sumber: rb-02 bagian config + rb-03-klaster-rabbitmq.yml lama)
+
+- name: "Fase 3 - Konfigurasi dan pembentukan cluster RabbitMQ"
+  hosts: rabbitmq
+  become: yes
+  gather_facts: yes
+  serial: 1
+
+  tasks:
+    # ---------- Konfigurasi dasar ----------
+    - name: "Tulis konfigurasi RabbitMQ (minimal, tanpa tuning)"
+      ansible.builtin.copy:
+        dest: /etc/rabbitmq/rabbitmq.conf
+        content: |
+          # Konfigurasi minimal sesuai kebutuhan:
+          # - TANPA tuning
+          # - TANPA dead-letter queue
+          # - TANPA policy per queue
+          # - Semua queue baru otomatis quorum (HA 3 node)
+          default_queue_type = quorum
+
+    - name: "Restart RabbitMQ agar konfigurasi terbaca"
+      ansible.builtin.systemd:
+        name: rabbitmq-server
+        state: restarted
+        enabled: yes
+
+    - name: "Buat virtual host aplikasi (abaikan jika sudah ada)"
+      ansible.builtin.command: rabbitmqctl add_vhost {{ rabbitmq_vhost }}
+      register: hasil_vhost
+      changed_when: "'already exists' not in hasil_vhost.stderr"
+      failed_when: hasil_vhost.rc != 0 and 'already exists' not in hasil_vhost.stderr
+
+    - name: "Buat user aplikasi (abaikan jika sudah ada)"
+      ansible.builtin.command: rabbitmqctl add_user {{ rabbitmq_app_user }} {{ rabbitmq_app_password }}
+      register: hasil_user
+      changed_when: "'already exists' not in hasil_user.stderr"
+      failed_when: hasil_user.rc != 0 and 'already exists' not in hasil_user.stderr
+
+    - name: "Beri hak akses user aplikasi ke virtual host (configure, write, read)"
+      ansible.builtin.command: rabbitmqctl set_permissions -p {{ rabbitmq_vhost }} {{ rabbitmq_app_user }} ".*" ".*" ".*"
+
+    - name: "Buat user administrator untuk management UI (abaikan jika sudah ada)"
+      ansible.builtin.command: rabbitmqctl add_user {{ rabbitmq_admin_user }} {{ rabbitmq_admin_password }}
+      register: hasil_admin
+      changed_when: "'already exists' not in hasil_admin.stderr"
+      failed_when: hasil_admin.rc != 0 and 'already exists' not in hasil_admin.stderr
+
+    - name: "Set tag administrator untuk user admin"
+      ansible.builtin.command: rabbitmqctl set_user_tags {{ rabbitmq_admin_user }} administrator
+
+    # ---------- Pembentukan cluster ----------
+    - name: "Ambil erlang cookie dari node basis cluster (rb-1) ke controller"
+      ansible.builtin.fetch:
+        src: /var/lib/rabbitmq/.erlang.cookie
+        dest: /tmp/ansible-rabbitmq-cookie/
+        flat: yes
+      when: inventory_hostname == rabbitmq_cluster_node
+
+    - name: "Sebarkan erlang cookie identik ke node lain"
+      ansible.builtin.copy:
+        src: /tmp/ansible-rabbitmq-cookie/.erlang.cookie
+        dest: /var/lib/rabbitmq/.erlang.cookie
+        owner: rabbitmq
+        group: rabbitmq
+        mode: "0400"
+      when: inventory_hostname != rabbitmq_cluster_node
+
+    - name: "Hentikan aplikasi RabbitMQ (persiapan join cluster)"
+      ansible.builtin.command: rabbitmqctl stop_app
+      when: inventory_hostname != rabbitmq_cluster_node
+
+    - name: "Reset state node sebelum join"
+      ansible.builtin.command: rabbitmqctl reset
+      when: inventory_hostname != rabbitmq_cluster_node
+
+    - name: "Join ke cluster node basis (abaikan jika sudah member)"
+      ansible.builtin.command: rabbitmqctl join_cluster rabbit@{{ rabbitmq_cluster_node }}
+      when: inventory_hostname != rabbitmq_cluster_node
+      register: hasil_join
+      failed_when: hasil_join.rc != 0 and 'already' not in hasil_join.stderr
+
+    - name: "Mulai aplikasi RabbitMQ"
+      ansible.builtin.command: rabbitmqctl start_app
+      when: inventory_hostname != rabbitmq_cluster_node
+
+    # ---------- Verifikasi ----------
+    - name: "Verifikasi status cluster dari semua node"
+      ansible.builtin.command: rabbitmqctl cluster_status
+      register: status_cluster
+      changed_when: false
+
+    - name: "Tampilkan status cluster"
+      ansible.builtin.debug:
+        var: status_cluster.stdout_lines

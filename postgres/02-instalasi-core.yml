@@ -1,0 +1,127 @@
+---
+# 02-instalasi-core.yml — Fase 2: instalasi paket inti PostgreSQL HA
+# Model 3 fase bkpm-ha-v2 — hasil akhir: binary semua komponen terpasang, BELUM dikonfigurasi
+# Komponen: PostgreSQL 17 (PGDG) + etcd (binary GitHub) + Patroni (venv pip) + PgBouncer (apt)
+# Identik di semua node — aman parallel. Konfigurasi = fase 03a/03b/03c.
+# (sumber: pg-02 (bagian install), pg-03 (bagian install), pg-04 (bagian install) lama)
+
+- name: "Fase 2 - Instalasi inti PostgreSQL HA (PG17 + etcd + Patroni + PgBouncer)"
+  hosts: postgres
+  become: yes
+  gather_facts: yes
+  tasks:
+    # ---------- Repo PGDG ----------
+    - name: "Unduh key PGDG"
+      ansible.builtin.get_url:
+        url: "{{ pgdg_key_url }}"
+        dest: /usr/share/keyrings/pgdg.asc
+        mode: "0644"
+
+    - name: "Dearmor key PGDG (signed-by butuh binary keyring)"
+      ansible.builtin.shell: "gpg --dearmor --yes -o /usr/share/keyrings/pgdg.gpg /usr/share/keyrings/pgdg.asc"
+      args:
+        creates: /usr/share/keyrings/pgdg.gpg
+
+    - name: "Tambah apt source PGDG ({{ ansible_distribution_release }}-pgdg)"
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
+        filename: pgdg
+        state: present
+        update_cache: true
+
+    # ---------- PostgreSQL 17 ----------
+    - name: "Pasang PostgreSQL {{ postgres_version }} + client"
+      ansible.builtin.apt:
+        name:
+          - "postgresql-{{ postgres_version }}"
+          - "postgresql-client-{{ postgres_version }}"
+        state: present
+        update_cache: true
+
+    # ---------- etcd ----------
+    - name: "Unduh etcd v{{ etcd_version }}"
+      ansible.builtin.get_url:
+        url: "https://github.com/etcd-io/etcd/releases/download/v{{ etcd_version }}/etcd-v{{ etcd_version }}-linux-{{ etcd_arch }}.tar.gz"
+        dest: "/tmp/etcd-v{{ etcd_version }}-linux-{{ etcd_arch }}.tar.gz"
+        mode: "0644"
+
+    - name: "Ekstrak tarball etcd"
+      ansible.builtin.unarchive:
+        src: "/tmp/etcd-v{{ etcd_version }}-linux-{{ etcd_arch }}.tar.gz"
+        dest: /tmp
+        remote_src: true
+        creates: "/tmp/etcd-v{{ etcd_version }}-linux-{{ etcd_arch }}"
+
+    - name: "Pasang etcd + etcdctl ke /usr/local/bin"
+      ansible.builtin.copy:
+        src: "/tmp/etcd-v{{ etcd_version }}-linux-{{ etcd_arch }}/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        remote_src: true
+        mode: "0755"
+      loop:
+        - etcd
+        - etcdctl
+
+    # ---------- Patroni ----------
+    - name: "Pasang Patroni + etcd3 client + psycopg2 driver (venv pip)"
+      ansible.builtin.pip:
+        name:
+          - "patroni[etcd3]"
+          - "psycopg2-binary"
+        virtualenv: "{{ patroni_venv }}"
+        virtualenv_command: python3 -m venv
+        state: present
+
+    # ---------- PgBouncer ----------
+    - name: "Pasang pgbouncer"
+      ansible.builtin.apt:
+        name: pgbouncer
+        state: present
+        update_cache: true
+
+    # ---------- Autostart (fase 2) ----------
+    # CATATAN: hanya pgbouncer yang unit-nya sudah ada di fase 2 (dari package apt).
+    # etcd & Patroni: unit-nya node-specific & butuh config file (03a/03b) —
+    # enable/start dilakukan di fase konfigurasi cluster, di luar lingkup install-only.
+    - name: "Aktifkan autostart pgbouncer"
+      ansible.builtin.systemd:
+        name: pgbouncer
+        enabled: yes
+        daemon_reload: yes
+
+    # ---------- Verifikasi ----------
+    - name: "Verifikasi versi semua komponen"
+      ansible.builtin.command: "{{ item }}"
+      register: versi_komponen
+      changed_when: false
+      failed_when: false
+      loop:
+        - "/usr/local/bin/etcd --version | head -1"
+        - "/usr/lib/postgresql/{{ postgres_version }}/bin/psql --version"
+        - "{{ patroni_venv }}/bin/patroni --version"
+        - "pgbouncer --version | head -1"
+
+    - name: "Tampilkan versi komponen"
+      ansible.builtin.debug:
+        msg: "{{ item.item }} -> {{ item.stdout | default('GAGAL') }}"
+      loop: "{{ versi_komponen.results }}"
+
+    - name: "Kumpulkan fakta paket apt (postgresql, pgbouncer)"
+      ansible.builtin.package_facts:
+        manager: apt
+
+    - name: "Verifikasi paket terpasang (nama + versi)"
+      ansible.builtin.debug:
+        msg:
+          - "postgresql-{{ postgres_version }}: {{ ansible_facts.packages['postgresql-' ~ postgres_version][0].version }}"
+          - "postgresql-client-{{ postgres_version }}: {{ ansible_facts.packages['postgresql-client-' ~ postgres_version][0].version }}"
+          - "pgbouncer: {{ ansible_facts.packages['pgbouncer'][0].version }}"
+
+    - name: "Verifikasi status autostart pgbouncer"
+      ansible.builtin.command: systemctl is-enabled pgbouncer
+      register: status_pgbouncer
+      changed_when: false
+
+    - name: "Tampilkan status autostart pgbouncer"
+      ansible.builtin.debug:
+        msg: "pgbouncer autostart: {{ status_pgbouncer.stdout }}"

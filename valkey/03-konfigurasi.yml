@@ -1,0 +1,98 @@
+---
+# 03-konfigurasi.yml — Fase 3: konfigurasi + start + verifikasi cluster Valkey
+# Model 3 fase bkpm-ha-v2 — hasil akhir: cluster HA jalan (primary + 2 replica + sentinel)
+# Branching peran: vk-1 = primary (valkey-primary.conf), vk-2/vk-3 = replica (valkey-replica.conf)
+# Config files statis (tanpa jinja) — branching hanya memilih file.
+
+- name: Fase 3 - Konfigurasi dan start cluster Valkey
+  hosts: valkey
+  become: yes
+  gather_facts: no
+  tasks:
+    # ---------- Konfigurasi ----------
+    - name: Salin konfigurasi PRIMARY ke vk-1
+      ansible.builtin.copy:
+        src: files/valkey-primary.conf
+        dest: /etc/valkey/valkey.conf
+        owner: valkey
+        group: valkey
+        mode: '0640'
+        backup: yes
+      when: inventory_hostname == valkey_primary_host
+
+    - name: Salin konfigurasi REPLICA ke vk-2 dan vk-3
+      ansible.builtin.copy:
+        src: files/valkey-replica.conf
+        dest: /etc/valkey/valkey.conf
+        owner: valkey
+        group: valkey
+        mode: '0640'
+        backup: yes
+      when: inventory_hostname != valkey_primary_host
+
+    - name: Salin konfigurasi sentinel (sama di semua node)
+      ansible.builtin.copy:
+        src: files/sentinel.conf
+        dest: /etc/valkey/sentinel.conf
+        owner: valkey
+        group: valkey
+        mode: '0640'
+        backup: yes
+
+    # ---------- Start service ----------
+    - name: Aktifkan dan start valkey-server
+      ansible.builtin.systemd:
+        name: valkey
+        enabled: yes
+        state: started
+
+    - name: Tunggu valkey-server siap (PONG)
+      ansible.builtin.command: /usr/local/bin/valkey-cli ping
+      register: ping_valkey
+      retries: 10
+      delay: 3
+      until: ping_valkey.stdout | trim == 'PONG'
+
+    - name: Aktifkan dan start valkey-sentinel
+      ansible.builtin.systemd:
+        name: valkey-sentinel
+        enabled: yes
+        state: started
+
+    - name: Tunggu sentinel mendengarkan port 26379
+      ansible.builtin.wait_for:
+        port: 26379
+        host: 127.0.0.1
+        timeout: 10
+
+    # ---------- Verifikasi ----------
+    - name: Verifikasi replikasi dari sisi primary (connected_slaves)
+      ansible.builtin.command: /usr/local/bin/valkey-cli info replication
+      register: info_replikasi
+      changed_when: false
+      when: inventory_hostname == valkey_primary_host
+
+    - name: Tampilkan status replikasi dari primary
+      ansible.builtin.debug:
+        var: info_replikasi.stdout_lines
+      when: inventory_hostname == valkey_primary_host
+
+    - name: Verifikasi status koneksi replika (master_link_status)
+      ansible.builtin.command: /usr/local/bin/valkey-cli info replication
+      register: info_replika
+      changed_when: false
+      when: inventory_hostname != valkey_primary_host
+
+    - name: Tampilkan status replika dari sisi replica
+      ansible.builtin.debug:
+        var: info_replika.stdout_lines
+      when: inventory_hostname != valkey_primary_host
+
+    - name: Verifikasi sentinel mengetahui primary (mymaster)
+      ansible.builtin.command: /usr/local/bin/valkey-cli -p 26379 sentinel get-master-addr-by-name mymaster
+      register: alamat_primary
+      changed_when: false
+
+    - name: Tampilkan alamat primary menurut sentinel
+      ansible.builtin.debug:
+        msg: "Sentinel mymaster -> {{ alamat_primary.stdout_lines | join(' ') }}"

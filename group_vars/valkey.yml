@@ -1,0 +1,16 @@
+# Variabel shared project Valkey — dipakai playbook 01/02/03
+# Varian install-only client: binary resmi valkey.io 9.1.1 (noble x86_64).
+# TANPA compile, TANPA apt — karena noble universe cuma punya 7.2.12.
+# Binary: /usr/local/bin/{valkey-server,valkey-cli,valkey-sentinel,valkey-benchmark,valkey-check-*}
+# Unit systemd: files/valkey.service & files/valkey-sentinel.service (hardened, proven di lab).
+# sha256 di-pin — download diverifikasi (sumber: download.valkey.io).
+
+valkey_version: "9.1.1"
+valkey_tarball: "valkey-9.1.1-noble-x86_64.tar.gz"
+valkey_extract_dir: "valkey-9.1.1-noble-x86_64"
+valkey_bin_url: "https://download.valkey.io/releases/valkey-9.1.1-noble-x86_64.tar.gz"
+valkey_sha256: "41f5eb5dc88111c5d117821c120c5a9fbcf2bcc3316953f811c04444046ecb28"
+
+# Node primary (hardcode nama inventory — dipakai branching config di fase 03)
+valkey_primary_host: "vk-1"
+valkey_primary_ip: "192.168.1.53"

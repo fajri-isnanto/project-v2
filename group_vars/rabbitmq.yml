@@ -1,0 +1,16 @@
+# Variabel shared project RabbitMQ — dipakai playbook 01/02/03
+# GANTI password sesuai kebutuhan tim aplikasi sebelum eksekusi
+rabbitmq_vhost: "bkpm"
+rabbitmq_app_user: "app-rabbitmq"
+rabbitmq_app_password: "GantiPasswordApp123!"
+rabbitmq_admin_user: "admin-rabbitmq"
+rabbitmq_admin_password: "GantiPasswordAdmin123!"
+
+# Versi (keputusan tim — PIN EXACT, sumber: repo resmi Team RabbitMQ deb1.rabbitmq.com, noble).
+# Cek ulang sebelum eksekusi: apt-cache madison rabbitmq-server erlang-base
+# (epoch "1:" pada erlang WAJIB disertakan — bagian dari string versi apt)
+rabbitmq_version: "4.2.9-1"
+erlang_version: "1:27.3.4.16-1"
+
+# Node pertama yang jadi basis cluster (join target)
+rabbitmq_cluster_node: "rb-1"

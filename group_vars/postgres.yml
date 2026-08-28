@@ -1,0 +1,32 @@
+# Variabel shared project PostgreSQL — dipakai playbook 01/02/03a/b/c
+# Sumber: pg-02/03/04 lama — nilai tidak diubah, hanya dipindah ke group_vars
+
+postgres_version: "17"
+pgdg_key_url: "https://www.postgresql.org/media/keys/ACCC4CF8.asc"
+
+# Patroni
+patroni_scope: "pg-ha"
+patroni_namespace: "/service/"
+patroni_venv: "/opt/patroni-venv"
+patroni_config: "/etc/patroni/patroni.yml"
+patroni_data_dir: "/var/lib/postgresql/17/main"
+pg_bin_dir: "/usr/lib/postgresql/17/bin"
+
+# etcd (DCS)
+etcd_version: "3.5.32"
+etcd_arch: "amd64"
+etcd_user: "etcd"
+etcd_data_dir: "/var/lib/etcd"
+etcd_cluster_token: "pg-ha-etcd-cluster"
+etcd_hosts: "pg-1:2379,pg-2:2379,pg-3:2379"
+
+# IP statis tiap node (wajib sama dgn inventory.ini)
+pg_node_ip:
+  pg-1: "192.168.1.50"
+  pg-2: "192.168.1.51"
+  pg-3: "192.168.1.52"
+
+# Password — LAB ONLY (production wajib ansible-vault)
+pg_superuser_password: "kodok"
+pg_replication_password: "kodok"
+pg_rewind_password: "kodok"
