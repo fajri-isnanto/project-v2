@@ -13,4 +13,4 @@ valkey_sha256: "41f5eb5dc88111c5d117821c120c5a9fbcf2bcc3316953f811c04444046ecb28
 
 # Node primary (hardcode nama inventory — dipakai branching config di fase 03)
 valkey_primary_host: "vk-1"
-valkey_primary_ip: "10.192.66.195"
+valkey_primary_ip: "10.192.66.146"
