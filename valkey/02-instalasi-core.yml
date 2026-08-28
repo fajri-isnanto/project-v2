@@ -94,6 +94,11 @@
       until: ping_valkey.stdout | trim == 'PONG'
       changed_when: false
 
+    - name: "Pastikan valkey-sentinel BELUM di-enable (enable + start di fase 03)"
+      ansible.builtin.systemd:
+        name: valkey-sentinel
+        enabled: no
+
     - name: "Bersihkan tarball dan direktori ekstrak"
       ansible.builtin.file:
         path: "{{ item }}"
