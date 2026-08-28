@@ -26,6 +26,12 @@
         update_cache: yes
         cache_valid_time: 3600
 
+    - name: "Buat direktori drop-in systemd RabbitMQ"
+      ansible.builtin.file:
+        path: /etc/systemd/system/rabbitmq-server.service.d
+        state: directory
+        mode: "0755"
+
     - name: "Buat drop-in systemd untuk batas file descriptor RabbitMQ"
       ansible.builtin.copy:
         dest: /etc/systemd/system/rabbitmq-server.service.d/limits.conf
