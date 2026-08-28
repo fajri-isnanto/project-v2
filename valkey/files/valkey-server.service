@@ -1,5 +1,6 @@
 # Valkey Server — systemd unit (statis, tanpa Jinja)
-# Copy ke /etc/systemd/system/valkey.service
+# Copy ke /etc/systemd/system/valkey-server.service
+# Nama unit = nama binary (valkey-server) — konsisten dengan enable/start & verifikasi.
 
 [Unit]
 Description=Valkey In-Memory Data Store

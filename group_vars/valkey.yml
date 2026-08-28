@@ -2,7 +2,8 @@
 # Varian install-only client: binary resmi valkey.io 9.1.1 (noble x86_64).
 # TANPA compile, TANPA apt — karena noble universe cuma punya 7.2.12.
 # Binary: /usr/local/bin/{valkey-server,valkey-cli,valkey-sentinel,valkey-benchmark,valkey-check-*}
-# Unit systemd: files/valkey.service & files/valkey-sentinel.service (hardened, proven di lab).
+# Unit systemd: files/valkey-server.service & files/valkey-sentinel.service (hardened, proven di lab).
+# Nama unit valkey-server.service = nama binary — konsisten dengan enable/start & verifikasi.
 # sha256 di-pin — download diverifikasi (sumber: download.valkey.io).
 
 valkey_version: "9.1.1"

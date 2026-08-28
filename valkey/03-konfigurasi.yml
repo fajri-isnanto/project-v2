@@ -42,7 +42,7 @@
     # ---------- Start service ----------
     - name: Aktifkan dan start valkey-server
       ansible.builtin.systemd:
-        name: valkey
+        name: valkey-server
         enabled: yes
         state: started
 

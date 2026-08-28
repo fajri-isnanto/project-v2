@@ -5,8 +5,10 @@
 # BELUM dikonfigurasi cluster (replikasi/sentinel = fase 03, di luar lingkup install-only).
 # Kenapa binary, bukan apt? noble universe cuma punya valkey 7.2.12; valkey.io
 # menyediakan binary artifact noble x86_64 9.1.1 (sha256 di-pin di group_vars).
-# Unit systemd pakai files/valkey.service & files/valkey-sentinel.service (hardened,
+# Unit systemd pakai files/valkey-server.service & files/valkey-sentinel.service (hardened,
 # path /usr/local/bin — cocok dengan lokasi install binary).
+# KEPUTUSAN: nama unit valkey-server.service (BUKAN valkey.service) — nama unit = nama binary.
+# (bug lama: unit valkey.service tapi enable name=valkey-server -> systemd not-found)
 
 - name: "Fase 2 - Instalasi inti Valkey 9.1.1 (binary resmi valkey.io)"
   hosts: valkey
@@ -44,12 +46,17 @@
 
     - name: "Salin unit systemd valkey-server (hardened, dari files/)"
       ansible.builtin.copy:
-        src: files/valkey.service
-        dest: /etc/systemd/system/valkey.service
+        src: files/valkey-server.service
+        dest: /etc/systemd/system/valkey-server.service
         owner: root
         group: root
         mode: "0644"
         backup: yes
+
+    - name: "Hapus unit lama valkey.service (rename ke valkey-server.service)"
+      ansible.builtin.file:
+        path: /etc/systemd/system/valkey.service
+        state: absent
 
     - name: "Salin unit systemd valkey-sentinel (hardened, dari files/)"
       ansible.builtin.copy:
