@@ -5,6 +5,8 @@
 # (9.1.1 noble x86_64), bukan compile source dan bukan apt (noble universe cuma 7.2.12).
 # Binary install tidak membuat user/direktori — itu sebabnya dibuat manual di sini.
 # (sumber: valkey-deps.yml lama — build deps dihapus saat pindah ke binary)
+# CATATAN EC2: TIDAK ada task set hostname — hostname dikelola cloud-init
+# (sama seperti keputusan rabbitmq/01-dependensi-os.yml di cloud).
 
 - name: Fase 1 - Siapkan user, grup, dan direktori untuk Valkey
   hosts: valkey
