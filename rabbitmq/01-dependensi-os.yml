@@ -1,16 +1,20 @@
 ---
 # 01-dependensi-os.yml — Fase 1: konfigurasi level OS untuk node RabbitMQ
-# Model 3 fase bkpm-ha-v2 (varian install-only) — hasil akhir: hostname, /etc/hosts, ufw terpasang (TIDAK diaktifkan), limits siap
+# Model 3 fase bkpm-ha-v2 (varian install-only) — hasil akhir: /etc/hosts, ufw terpasang (TIDAK diaktifkan), limits siap
 # (sumber: rb-01-konfigurasi-os.yml lama, tanpa perubahan perilaku)
+# CATATAN EC2: task "set hostname" di-comment — hostname EC2 dikelola cloud-init,
+# set manual via ansible.builtin.hostname bakal revert pas reboot (sama seperti kasus rb-* di lab).
 
 - name: "Fase 1 - Siapkan level OS untuk RabbitMQ (rb-1, rb-2, rb-3)"
   hosts: rabbitmq
   become: yes
   gather_facts: yes
   tasks:
-    - name: "Set hostname sesuai nama node"
-      ansible.builtin.hostname:
-        name: "{{ inventory_hostname }}"
+    # - name: "Set hostname sesuai nama node"
+    #   ansible.builtin.hostname:
+    #     name: "{{ inventory_hostname }}"
+    #   (di-comment: EC2 hostname dikelola cloud-init — set manual revert pas reboot,
+    #    lihat CATATAN di header. /etc/hosts tetap diisi supaya resolusi nama rb-* jalan.)
 
     - name: "Pastikan entry ketiga node di /etc/hosts"
       ansible.builtin.lineinfile:
