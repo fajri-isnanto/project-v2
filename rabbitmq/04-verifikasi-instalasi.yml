@@ -1,0 +1,67 @@
+---
+# 04-verifikasi-instalasi.yml — Verifikasi hasil instalasi RabbitMQ (install-only)
+# Model 3 fase bkpm-ha-v2 — dipakai SETELAH fase 02, SEBELUM fase 03 (cluster).
+# Cek: versi paket, jumlah paket erlang, plugin management, status service, ufw.
+# Output langsung di-print via debug per node.
+
+- name: "Verifikasi instalasi RabbitMQ (versi, komponen, status service)"
+  hosts: rabbitmq
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: "Kumpulkan fakta paket apt"
+      ansible.builtin.package_facts:
+        manager: apt
+
+    - name: "Tampilkan versi rabbitmq-server dan erlang-base"
+      ansible.builtin.debug:
+        msg:
+          - "rabbitmq-server : {{ ansible_facts.packages['rabbitmq-server'][0].version }}"
+          - "erlang-base    : {{ ansible_facts.packages['erlang-base'][0].version }}"
+
+    - name: "Hitung jumlah paket erlang terpasang"
+      ansible.builtin.shell: dpkg -l 'erlang-*' | grep -c '^ii'
+      register: jumlah_erlang
+      changed_when: false
+
+    - name: "Tampilkan jumlah paket erlang"
+      ansible.builtin.debug:
+        msg: "Jumlah paket erlang terpasang: {{ jumlah_erlang.stdout }} (harus 17)"
+
+    - name: "Ambil versi broker"
+      ansible.builtin.command: rabbitmqctl version
+      register: versi_broker
+      changed_when: false
+
+    - name: "Cek plugin management (enabled/disabled)"
+      ansible.builtin.shell: rabbitmq-plugins list | grep management
+      register: plugin_management
+      changed_when: false
+
+    - name: "Cek autostart rabbitmq-server"
+      ansible.builtin.command: systemctl is-enabled rabbitmq-server
+      register: status_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: "Cek status aktif rabbitmq-server"
+      ansible.builtin.command: systemctl is-active rabbitmq-server
+      register: status_active
+      changed_when: false
+      failed_when: false
+
+    - name: "Cek status ufw"
+      ansible.builtin.command: ufw status
+      register: status_ufw
+      changed_when: false
+      failed_when: false
+
+    - name: "Tampilkan hasil verifikasi lengkap"
+      ansible.builtin.debug:
+        msg:
+          - "HOST: {{ inventory_hostname }}"
+          - "Versi broker (rabbitmqctl): {{ versi_broker.stdout | default('GAGAL') }}"
+          - "Plugin management: {{ plugin_management.stdout | default('TIDAK AKTIF') }}"
+          - "Autostart (is-enabled): {{ status_enabled.stdout | default('?') }}"
+          - "Aktif (is-active): {{ status_active.stdout | default('?') }}"
+          - "UFW: {{ status_ufw.stdout_lines | first | default('?') }}"
