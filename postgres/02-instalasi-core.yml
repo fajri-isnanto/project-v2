@@ -1,6 +1,7 @@
 ---
 # 02-instalasi-core.yml — Fase 2: instalasi paket inti PostgreSQL HA
-# Model 3 fase bkpm-ha-v2 — hasil akhir: binary semua komponen terpasang, BELUM dikonfigurasi
+# Model 3 fase bkpm-ha-v2 — hasil akhir: binary semua komponen terpasang,
+# postgresql & pgbouncer START standalone (config default apt).
 # Komponen: PostgreSQL 17 (PGDG) + etcd (binary GitHub) + Patroni (venv pip) + PgBouncer (apt)
 # Identik di semua node — aman parallel. Konfigurasi = fase 03a/03b/03c.
 # (sumber: pg-02 (bagian install), pg-03 (bagian install), pg-04 (bagian install) lama)
@@ -79,15 +80,24 @@
         state: present
         update_cache: true
 
-    # ---------- Autostart (fase 2) ----------
-    # CATATAN: hanya pgbouncer yang unit-nya sudah ada di fase 2 (dari package apt).
-    # etcd & Patroni: unit-nya node-specific & butuh config file (03a/03b) —
-    # enable/start dilakukan di fase konfigurasi cluster, di luar lingkup install-only.
-    - name: "Aktifkan autostart pgbouncer"
+    # ---------- Autostart + start (fase 2) ----------
+    # postgresql & pgbouncer: unit dari package apt + config default -> bisa start
+    # standalone sekarang. etcd & Patroni: unit-nya node-specific & butuh config
+    # (03a/03b) -> enable/start di fase konfigurasi cluster.
+    # CATATAN: fase 03b akan drop cluster main + mask postgresql.service (lifecycle
+    # dipegang Patroni) — start di fase 2 aman, di-override fase 3b.
+    - name: "Aktifkan autostart dan start postgresql (standalone, sebelum Patroni)"
+      ansible.builtin.systemd:
+        name: postgresql
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: "Aktifkan autostart dan start pgbouncer (config default apt)"
       ansible.builtin.systemd:
         name: pgbouncer
         enabled: yes
-        daemon_reload: yes
+        state: started
 
     # ---------- Verifikasi ----------
     - name: "Verifikasi versi semua komponen"
@@ -117,11 +127,20 @@
           - "postgresql-client-{{ postgres_version }}: {{ ansible_facts.packages['postgresql-client-' ~ postgres_version][0].version }}"
           - "pgbouncer: {{ ansible_facts.packages['pgbouncer'][0].version }}"
 
-    - name: "Verifikasi status autostart pgbouncer"
-      ansible.builtin.command: systemctl is-enabled pgbouncer
-      register: status_pgbouncer
+    - name: "Verifikasi status autostart postgresql dan pgbouncer"
+      ansible.builtin.command: systemctl is-enabled postgresql pgbouncer
+      register: status_autostart_pg
       changed_when: false
+      failed_when: false
 
-    - name: "Tampilkan status autostart pgbouncer"
+    - name: "Verifikasi status aktif postgresql dan pgbouncer"
+      ansible.builtin.command: systemctl is-active postgresql pgbouncer
+      register: status_aktif_pg
+      changed_when: false
+      failed_when: false
+
+    - name: "Tampilkan status service postgresql dan pgbouncer"
       ansible.builtin.debug:
-        msg: "pgbouncer autostart: {{ status_pgbouncer.stdout }}"
+        msg:
+          - "Autostart (is-enabled): {{ status_autostart_pg.stdout }}"
+          - "Aktif (is-active): {{ status_aktif_pg.stdout }}"

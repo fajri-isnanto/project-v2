@@ -79,10 +79,11 @@
       register: hasil_plugin
       changed_when: "'Plugin configuration unchanged' not in hasil_plugin.stdout"
 
-    - name: "Aktifkan autostart rabbitmq-server"
+    - name: "Aktifkan autostart dan start rabbitmq-server (standalone, cluster di fase 03)"
       ansible.builtin.systemd:
         name: rabbitmq-server
         enabled: yes
+        state: started
         daemon_reload: yes
 
     - name: "Verifikasi versi RabbitMQ"
@@ -118,6 +119,14 @@
       register: status_rabbitmq
       changed_when: false
 
-    - name: "Tampilkan status autostart rabbitmq-server"
+    - name: "Verifikasi status aktif rabbitmq-server"
+      ansible.builtin.command: systemctl is-active rabbitmq-server
+      register: status_aktif_rabbitmq
+      changed_when: false
+      failed_when: false
+
+    - name: "Tampilkan status service rabbitmq-server"
       ansible.builtin.debug:
-        msg: "rabbitmq-server autostart: {{ status_rabbitmq.stdout }}"
+        msg:
+          - "Autostart: {{ status_rabbitmq.stdout }}"
+          - "Aktif: {{ status_aktif_rabbitmq.stdout }}"

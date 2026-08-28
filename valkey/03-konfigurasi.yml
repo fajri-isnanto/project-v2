@@ -1,7 +1,9 @@
 ---
-# 03-konfigurasi.yml — Fase 3: konfigurasi + start + verifikasi cluster Valkey
+# 03-konfigurasi.yml — Fase 3: konfigurasi peran + start sentinel + verifikasi cluster Valkey
 # Model 3 fase bkpm-ha-v2 — hasil akhir: cluster HA jalan (primary + 2 replica + sentinel)
-# Branching peran: vk-1 = primary (valkey-primary.conf), vk-2/vk-3 = replica (valkey-replica.conf)
+# Branching peran: vk-1 = primary (valkey-base.conf, tanpa replicaof), vk-2/vk-3 = replica
+# (valkey-replica.conf). Fase 2 sudah menulis valkey-base.conf + start server standalone;
+# di fase 3: replica di-overwrite + server direstart, sentinel di-enable + start.
 # Config files statis (tanpa jinja) — branching hanya memilih file.
 
 - name: Fase 3 - Konfigurasi dan start cluster Valkey
@@ -10,9 +12,9 @@
   gather_facts: no
   tasks:
     # ---------- Konfigurasi ----------
-    - name: Salin konfigurasi PRIMARY ke vk-1
+    - name: Salin konfigurasi DASAR (primary) ke vk-1
       ansible.builtin.copy:
-        src: files/valkey-primary.conf
+        src: files/valkey-base.conf
         dest: /etc/valkey/valkey.conf
         owner: valkey
         group: valkey
@@ -39,12 +41,12 @@
         mode: '0640'
         backup: yes
 
-    # ---------- Start service ----------
-    - name: Aktifkan dan start valkey-server
+    # ---------- Start/restart service ----------
+    - name: Restart valkey-server (terapkan config peran)
       ansible.builtin.systemd:
         name: valkey-server
         enabled: yes
-        state: started
+        state: restarted
 
     - name: Tunggu valkey-server siap (PONG)
       ansible.builtin.command: /usr/local/bin/valkey-cli ping

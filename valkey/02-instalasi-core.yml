@@ -1,14 +1,17 @@
 ---
 # 02-instalasi-core.yml — Fase 2: instalasi inti Valkey (binary resmi valkey.io 9.1.1)
 # Model 3 fase bkpm-ha-v2 (varian install-only client)
-# Hasil akhir: binary terpasang + unit systemd + service di-enable (autostart),
-# BELUM dikonfigurasi cluster (replikasi/sentinel = fase 03, di luar lingkup install-only).
+# Hasil akhir: binary terpasang + unit systemd + config DASAR standalone + valkey-server
+# START (service up). BELUM ada peran cluster (replikasi/sentinel = fase 03).
 # Kenapa binary, bukan apt? noble universe cuma punya valkey 7.2.12; valkey.io
 # menyediakan binary artifact noble x86_64 9.1.1 (sha256 di-pin di group_vars).
 # Unit systemd pakai files/valkey-server.service & files/valkey-sentinel.service (hardened,
 # path /usr/local/bin — cocok dengan lokasi install binary).
 # KEPUTUSAN: nama unit valkey-server.service (BUKAN valkey.service) — nama unit = nama binary.
 # (bug lama: unit valkey.service tapi enable name=valkey-server -> systemd not-found)
+# KEPUTUSAN service up di fase 2: config DASAR (files/valkey-base.conf, standalone tanpa
+# replicaof) ditulis di fase 2 lalu server di-start. Peran primary/replica + sentinel
+# tetap fase 03 (config di-overwrite + restart). Sentinel TIDAK disentuh di fase 2.
 
 - name: "Fase 2 - Instalasi inti Valkey 9.1.1 (binary resmi valkey.io)"
   hosts: valkey
@@ -67,16 +70,29 @@
         mode: "0644"
         backup: yes
 
-    - name: "Aktifkan autostart valkey-server"
+    - name: "Salin konfigurasi DASAR valkey (standalone, sama di semua node)"
+      ansible.builtin.copy:
+        src: files/valkey-base.conf
+        dest: /etc/valkey/valkey.conf
+        owner: valkey
+        group: valkey
+        mode: '0640'
+        backup: yes
+
+    - name: "Aktifkan autostart dan start valkey-server (config dasar standalone)"
       ansible.builtin.systemd:
         name: valkey-server
         enabled: yes
+        state: started
         daemon_reload: yes
 
-    - name: "Aktifkan autostart valkey-sentinel"
-      ansible.builtin.systemd:
-        name: valkey-sentinel
-        enabled: yes
+    - name: "Tunggu valkey-server siap (PONG)"
+      ansible.builtin.command: /usr/local/bin/valkey-cli ping
+      register: ping_valkey
+      retries: 10
+      delay: 3
+      until: ping_valkey.stdout | trim == 'PONG'
+      changed_when: false
 
     - name: "Bersihkan tarball dan direktori ekstrak"
       ansible.builtin.file:
@@ -92,13 +108,20 @@
       register: versi_valkey
       changed_when: false
 
-    - name: "Verifikasi status autostart service"
-      ansible.builtin.command: systemctl is-enabled valkey-server valkey-sentinel
+    - name: "Verifikasi status autostart valkey-server"
+      ansible.builtin.command: systemctl is-enabled valkey-server
       register: status_service
       changed_when: false
+
+    - name: "Verifikasi status aktif valkey-server"
+      ansible.builtin.command: systemctl is-active valkey-server
+      register: status_aktif
+      changed_when: false
+      failed_when: false
 
     - name: "Tampilkan hasil verifikasi"
       ansible.builtin.debug:
         msg:
           - "Binary: {{ versi_valkey.stdout }}"
           - "Autostart: {{ status_service.stdout }}"
+          - "Aktif: {{ status_aktif.stdout }}"
