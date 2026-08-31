@@ -16,26 +16,17 @@
 
   tasks:
     # ---------- Service ----------
-    - name: "Periksa status service valkey-server"
-      ansible.builtin.command: systemctl is-enabled valkey-server && systemctl is-active valkey-server
-      register: status_server
-      changed_when: false
-      failed_when: false
+    - name: "Kumpulkan fakta status service systemd"
+      ansible.builtin.service_facts:
 
-    - name: "Periksa status service valkey-sentinel"
-      ansible.builtin.command: systemctl is-enabled valkey-sentinel && systemctl is-active valkey-sentinel
-      register: status_sentinel
-      changed_when: false
-      failed_when: false
-
-    - name: "Verifikasi kedua service enabled dan aktif"
+    - name: "Verifikasi valkey-server dan valkey-sentinel enabled + aktif"
       ansible.builtin.assert:
         that:
-          - "'enabled' in status_server.stdout"
-          - "'active' in status_server.stdout"
-          - "'enabled' in status_sentinel.stdout"
-          - "'active' in status_sentinel.stdout"
-        fail_msg: "Service valkey-server / valkey-sentinel tidak enabled+active di {{ inventory_hostname }}"
+          - ansible_facts.services['valkey-server.service'].state == 'running'
+          - ansible_facts.services['valkey-server.service'].status == 'enabled'
+          - ansible_facts.services['valkey-sentinel.service'].state == 'running'
+          - ansible_facts.services['valkey-sentinel.service'].status == 'enabled'
+        fail_msg: "Service valkey-server / valkey-sentinel tidak enabled+running di {{ inventory_hostname }} (cek: systemctl status valkey-server valkey-sentinel)"
 
     # ---------- Respons server ----------
     - name: "Uji respons valkey-server (PONG port 6379)"
@@ -163,8 +154,8 @@
       ansible.builtin.debug:
         msg:
           - "HOST: {{ inventory_hostname }}"
-          - "valkey-server: {{ status_server.stdout | replace(chr(10), ' / ') }}"
-          - "valkey-sentinel: {{ status_sentinel.stdout | replace(chr(10), ' / ') }}"
+          - "valkey-server: state={{ ansible_facts.services['valkey-server.service'].state | default('?') }}, status={{ ansible_facts.services['valkey-server.service'].status | default('?') }}"
+          - "valkey-sentinel: state={{ ansible_facts.services['valkey-sentinel.service'].state | default('?') }}, status={{ ansible_facts.services['valkey-sentinel.service'].status | default('?') }}"
           - "Ping: server={{ ping_server.stdout | default('GAGAL') }}, sentinel={{ ping_sentinel.stdout | default('GAGAL') }}"
           - "Replikasi: {{ replikasi.stdout_lines }}"
           - "replicaof di valkey.conf: {{ jumlah_replicaof.stdout | trim }} (0=primary, 1=replica)"
