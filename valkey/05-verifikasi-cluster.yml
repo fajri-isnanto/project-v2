@@ -134,18 +134,18 @@
         fail_msg: "sentinel di {{ inventory_hostname }} tidak menunjuk ke {{ valkey_primary_ip }} 6379"
 
     - name: "Ambil ringkasan sentinel (replica terlihat + sentinel lain), tunggu konvergensi"
-      ansible.builtin.command: /usr/local/bin/valkey-cli -p 26379 sentinel master mymaster
+      ansible.builtin.shell: /usr/local/bin/valkey-cli -p 26379 sentinel master mymaster | grep -A1 -E '^(num-slaves|num-other-sentinels|flags)$'
       register: ringkas_sentinel
       changed_when: false
       retries: 10
       delay: 3
-      until: ringkas_sentinel.stdout | regex_search('num-other-sentinels\n(\d+)', '\1') | default('0') == '2'
+      until: "'num-other-sentinels\n2' in ringkas_sentinel.stdout"
 
     - name: "Verifikasi sentinel melihat 2 replica dan 2 sentinel lain (quorum siap)"
       ansible.builtin.assert:
         that:
-          - ringkas_sentinel.stdout | regex_search('num-slaves\n(\d+)', '\1') | default('0') == '2'
-          - ringkas_sentinel.stdout | regex_search('num-other-sentinels\n(\d+)', '\1') | default('0') == '2'
+          - "'num-slaves\n2' in ringkas_sentinel.stdout"
+          - "'num-other-sentinels\n2' in ringkas_sentinel.stdout"
           - "'flags\nmaster' in ringkas_sentinel.stdout"
         fail_msg: "sentinel di {{ inventory_hostname }} tidak melihat cluster 2 replica + 2 sentinel lain"
 
@@ -160,4 +160,4 @@
           - "Replikasi: {{ replikasi.stdout_lines }}"
           - "replicaof di valkey.conf: {{ jumlah_replicaof.stdout | trim }} (0=primary, 1=replica)"
           - "Sentinel mymaster -> {{ alamat_primary.stdout_lines | join(' ') }}"
-          - "num-slaves={{ ringkas_sentinel.stdout | regex_search('num-slaves\n(\\d+)', '\\1') | default('?') }}, num-other-sentinels={{ ringkas_sentinel.stdout | regex_search('num-other-sentinels\n(\\d+)', '\\1') | default('?') }}"
+          - "Sentinel ringkas (num-slaves / num-other-sentinels / flags): {{ ringkas_sentinel.stdout_lines | join(' ') }}"
