@@ -2,9 +2,9 @@
 # GANTI password sesuai kebutuhan tim aplikasi sebelum eksekusi
 rabbitmq_vhost: "bkpm"
 rabbitmq_app_user: "app-rabbitmq"
-rabbitmq_app_password: "GantiPasswordApp123!"
+rabbitmq_app_password: "devel0pment"
 rabbitmq_admin_user: "admin-rabbitmq"
-rabbitmq_admin_password: "GantiPasswordAdmin123!"
+rabbitmq_admin_password: "devel0pment"
 
 # Versi (keputusan tim — PIN EXACT, sumber: repo resmi Team RabbitMQ deb1.rabbitmq.com, noble).
 # Cek ulang sebelum eksekusi: apt-cache madison rabbitmq-server erlang-base
