@@ -71,6 +71,15 @@
         mode: "0400"
       when: inventory_hostname != rabbitmq_cluster_node
 
+    # PENTING: VM Erlang baca .erlang.cookie HANYA saat boot. stop_app tidak
+    # me-restart VM — kalau cookie baru di-copy tanpa restart, VM masih pakai
+    # cookie lama -> rabbitmqctl (CLI) gagal autentikasi ke server -> join gagal.
+    - name: "Restart RabbitMQ di node lain agar cookie baru terbaca (VM baca cookie saat boot)"
+      ansible.builtin.systemd:
+        name: rabbitmq-server
+        state: restarted
+      when: inventory_hostname != rabbitmq_cluster_node
+
     - name: "Hentikan aplikasi RabbitMQ (persiapan join cluster)"
       ansible.builtin.command: rabbitmqctl stop_app
       when: inventory_hostname != rabbitmq_cluster_node
