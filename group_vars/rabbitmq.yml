@@ -12,5 +12,12 @@ rabbitmq_admin_password: "devel0pment"
 rabbitmq_version: "4.2.9-1"
 erlang_version: "1:27.3.4.16-1"
 
-# Node pertama yang jadi basis cluster (join target)
+# Node pertama yang jadi basis cluster
+# DUA variabel, dua peran berbeda:
+# - rabbitmq_cluster_node: nama INVENTORY (rb-1) — dipakai branching when +
+#   fetch cookie di playbook. Bukan nama node erlang.
+# - rabbitmq_cluster_hostname: HOSTNAME OS node1 (cloud-init ip-10-192-*-*).
+#   Nodename erlang = rabbit@<hostname OS> — ini target join_cluster.
+#   (EC2: hostname bukan rb-1, jadi join ke rabbit@rb-1 bakal gagal)
 rabbitmq_cluster_node: "rb-1"
+rabbitmq_cluster_hostname: "ip-10-192-66-195"

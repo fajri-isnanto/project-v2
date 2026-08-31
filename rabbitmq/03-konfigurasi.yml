@@ -89,7 +89,7 @@
       when: inventory_hostname != rabbitmq_cluster_node
 
     - name: "Join ke cluster node basis (abaikan jika sudah member)"
-      ansible.builtin.command: rabbitmqctl join_cluster rabbit@{{ rabbitmq_cluster_node }}
+      ansible.builtin.command: rabbitmqctl join_cluster rabbit@{{ rabbitmq_cluster_hostname }}
       when: inventory_hostname != rabbitmq_cluster_node
       register: hasil_join
       failed_when: hasil_join.rc != 0 and 'already' not in hasil_join.stderr
