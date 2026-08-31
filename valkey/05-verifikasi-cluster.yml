@@ -1,0 +1,172 @@
+---
+# 05-verifikasi-cluster.yml — Verifikasi hasil fase 03 (cluster Valkey: replikasi + sentinel)
+# Model 3 fase bkpm-ha-v2 — dipakai SETELAH fase 03, dan bisa dijalankan KAPAN SAJA
+# sebagai health check cluster (misal: setelah reboot, sebelum demo, dsb).
+# Cek: service up, PONG, peran node (primary/replica), koneksi replikasi,
+# isi valkey.conf sesuai peran, sentinel aktif + melihat master + quorum.
+# BEDA DARI 04 (informatif): playbook ini FAIL kalau cluster tidak sehat —
+# assert dipasang di kondisi kritis, jadi cocok jadi gate sebelum lanjut.
+# Sentinel butuh waktu konvergensi (pub/sub hello ~2 detik) — cek
+# num-other-sentinels memakai retries supaya tidak false-fail.
+
+- name: "Verifikasi cluster Valkey (replikasi, sentinel, konfigurasi peran)"
+  hosts: valkey
+  become: yes
+  gather_facts: no
+
+  tasks:
+    # ---------- Service ----------
+    - name: "Periksa status service valkey-server"
+      ansible.builtin.command: systemctl is-enabled valkey-server && systemctl is-active valkey-server
+      register: status_server
+      changed_when: false
+      failed_when: false
+
+    - name: "Periksa status service valkey-sentinel"
+      ansible.builtin.command: systemctl is-enabled valkey-sentinel && systemctl is-active valkey-sentinel
+      register: status_sentinel
+      changed_when: false
+      failed_when: false
+
+    - name: "Verifikasi kedua service enabled dan aktif"
+      ansible.builtin.assert:
+        that:
+          - "'enabled' in status_server.stdout"
+          - "'active' in status_server.stdout"
+          - "'enabled' in status_sentinel.stdout"
+          - "'active' in status_sentinel.stdout"
+        fail_msg: "Service valkey-server / valkey-sentinel tidak enabled+active di {{ inventory_hostname }}"
+
+    # ---------- Respons server ----------
+    - name: "Uji respons valkey-server (PONG port 6379)"
+      ansible.builtin.command: /usr/local/bin/valkey-cli ping
+      register: ping_server
+      changed_when: false
+      failed_when: false
+
+    - name: "Uji respons sentinel (PONG port 26379)"
+      ansible.builtin.command: /usr/local/bin/valkey-cli -p 26379 ping
+      register: ping_sentinel
+      changed_when: false
+      failed_when: false
+
+    - name: "Verifikasi PONG dari server dan sentinel"
+      ansible.builtin.assert:
+        that:
+          - ping_server.stdout | trim == 'PONG'
+          - ping_sentinel.stdout | trim == 'PONG'
+        fail_msg: "valkey-server atau valkey-sentinel tidak merespons PONG di {{ inventory_hostname }}"
+
+    - name: "Periksa port mendengarkan (6379 dan 26379)"
+      ansible.builtin.command: ss -ltn
+      register: port_listen
+      changed_when: false
+      failed_when: false
+
+    - name: "Verifikasi port 6379 dan 26379 listening"
+      ansible.builtin.assert:
+        that:
+          - "'127.0.0.1:6379' in port_listen.stdout or '0.0.0.0:6379' in port_listen.stdout or '*:6379' in port_listen.stdout"
+          - "'127.0.0.1:26379' in port_listen.stdout or '0.0.0.0:26379' in port_listen.stdout or '*:26379' in port_listen.stdout"
+        fail_msg: "Port 6379 / 26379 tidak listening di {{ inventory_hostname }}"
+
+    # ---------- Peran & replikasi ----------
+    - name: "Ambil ringkasan replikasi (peran + koneksi)"
+      ansible.builtin.shell: /usr/local/bin/valkey-cli info replication | grep -E "^(role|connected_slaves|master_host|master_link_status):"
+      register: replikasi
+      changed_when: false
+
+    - name: "Verifikasi vk-1 sebagai primary dengan 2 replica"
+      ansible.builtin.assert:
+        that:
+          - "'role:master' in replikasi.stdout"
+          - "'connected_slaves:2' in replikasi.stdout"
+        fail_msg: "{{ inventory_hostname }} harusnya PRIMARY dengan 2 replica — cek info replication"
+      when: inventory_hostname == valkey_primary_host
+
+    - name: "Verifikasi vk-2 dan vk-3 sebagai replica yang tersambung ke primary"
+      ansible.builtin.assert:
+        that:
+          - "'role:slave' in replikasi.stdout"
+          - "'master_host:{{ valkey_primary_ip }}' in replikasi.stdout"
+          - "'master_link_status:up' in replikasi.stdout"
+        fail_msg: "{{ inventory_hostname }} harusnya REPLICA tersambung ke {{ valkey_primary_ip }} — cek info replication"
+      when: inventory_hostname != valkey_primary_host
+
+    # ---------- Konfigurasi di filesystem ----------
+    - name: "Hitung direktif replicaof di valkey.conf"
+      ansible.builtin.shell: grep -c '^replicaof' /etc/valkey/valkey.conf || true
+      register: jumlah_replicaof
+      changed_when: false
+
+    - name: "Verifikasi valkey.conf sesuai peran (primary tanpa replicaof)"
+      ansible.builtin.assert:
+        that:
+          - jumlah_replicaof.stdout | trim == '0'
+        fail_msg: "valkey.conf di primary TIDAK boleh punya replicaof"
+      when: inventory_hostname == valkey_primary_host
+
+    - name: "Verifikasi valkey.conf sesuai peran (replica punya replicaof)"
+      ansible.builtin.assert:
+        that:
+          - jumlah_replicaof.stdout | trim == '1'
+        fail_msg: "valkey.conf di replica WAJIB punya replicaof {{ valkey_primary_ip }} 6379"
+      when: inventory_hostname != valkey_primary_host
+
+    - name: "Periksa keberadaan dan kepemilikan sentinel.conf"
+      ansible.builtin.stat:
+        path: /etc/valkey/sentinel.conf
+      register: stat_sentinel_conf
+
+    - name: "Verifikasi sentinel.conf ada dengan owner valkey mode 0640"
+      ansible.builtin.assert:
+        that:
+          - stat_sentinel_conf.stat.exists
+          - stat_sentinel_conf.stat.pw_name == 'valkey'
+          - stat_sentinel_conf.stat.gr_name == 'valkey'
+          - stat_sentinel_conf.stat.mode == '0640'
+        fail_msg: "sentinel.conf tidak sesuai (ada? owner? mode?) di {{ inventory_hostname }}"
+
+    # ---------- Sentinel: pandangan cluster ----------
+    - name: "Ambil alamat primary menurut sentinel"
+      ansible.builtin.command: /usr/local/bin/valkey-cli -p 26379 sentinel get-master-addr-by-name mymaster
+      register: alamat_primary
+      changed_when: false
+      failed_when: false
+
+    - name: "Verifikasi sentinel mengetahui alamat primary yang benar"
+      ansible.builtin.assert:
+        that:
+          - "'{{ valkey_primary_ip }}' in alamat_primary.stdout"
+          - "'6379' in alamat_primary.stdout"
+          - "'0.0.0.0' not in alamat_primary.stdout"
+        fail_msg: "sentinel di {{ inventory_hostname }} tidak menunjuk ke {{ valkey_primary_ip }} 6379"
+
+    - name: "Ambil ringkasan sentinel (replica terlihat + sentinel lain), tunggu konvergensi"
+      ansible.builtin.command: /usr/local/bin/valkey-cli -p 26379 sentinel master mymaster
+      register: ringkas_sentinel
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: ringkas_sentinel.stdout | regex_search('num-other-sentinels\n(\d+)', '\1') | default('0') == '2'
+
+    - name: "Verifikasi sentinel melihat 2 replica dan 2 sentinel lain (quorum siap)"
+      ansible.builtin.assert:
+        that:
+          - ringkas_sentinel.stdout | regex_search('num-slaves\n(\d+)', '\1') | default('0') == '2'
+          - ringkas_sentinel.stdout | regex_search('num-other-sentinels\n(\d+)', '\1') | default('0') == '2'
+          - "'flags\nmaster' in ringkas_sentinel.stdout"
+        fail_msg: "sentinel di {{ inventory_hostname }} tidak melihat cluster 2 replica + 2 sentinel lain"
+
+    # ---------- Ringkasan ----------
+    - name: "Tampilkan ringkasan verifikasi cluster per node"
+      ansible.builtin.debug:
+        msg:
+          - "HOST: {{ inventory_hostname }}"
+          - "valkey-server: {{ status_server.stdout | replace(chr(10), ' / ') }}"
+          - "valkey-sentinel: {{ status_sentinel.stdout | replace(chr(10), ' / ') }}"
+          - "Ping: server={{ ping_server.stdout | default('GAGAL') }}, sentinel={{ ping_sentinel.stdout | default('GAGAL') }}"
+          - "Replikasi: {{ replikasi.stdout_lines }}"
+          - "replicaof di valkey.conf: {{ jumlah_replicaof.stdout | trim }} (0=primary, 1=replica)"
+          - "Sentinel mymaster -> {{ alamat_primary.stdout_lines | join(' ') }}"
+          - "num-slaves={{ ringkas_sentinel.stdout | regex_search('num-slaves\n(\\d+)', '\\1') | default('?') }}, num-other-sentinels={{ ringkas_sentinel.stdout | regex_search('num-other-sentinels\n(\\d+)', '\\1') | default('?') }}"
