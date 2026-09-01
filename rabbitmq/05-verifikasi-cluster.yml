@@ -79,8 +79,8 @@
           - "'{{ daftar_nodename[2] }}' in status_cluster.stdout"
         fail_msg: "Cluster belum 3 node running di {{ inventory_hostname }} — cek: rabbitmqctl cluster_status"
 
-    - name: "Ambil baris partisi dari cluster_status (header + nilai)"
-      ansible.builtin.shell: rabbitmqctl cluster_status | grep -i -A1 partitions
+    - name: "Ambil nilai partisi dari cluster_status (baris setelah header)"
+      ansible.builtin.shell: rabbitmqctl cluster_status | grep -i -A1 partitions | tail -1
       register: hasil_partisi
       changed_when: false
       failed_when: false
@@ -88,7 +88,7 @@
     - name: "Verifikasi tidak ada partisi jaringan"
       ansible.builtin.assert:
         that:
-          - "'none' in hasil_partisi.stdout or '[]' in hasil_partisi.stdout"
+          - "hasil_partisi.stdout | trim == 'none' or hasil_partisi.stdout | trim == '[]'"
         fail_msg: "Cluster KENA PARTISI di {{ inventory_hostname }} — {{ hasil_partisi.stdout }}"
 
     # ---------- Konfigurasi ----------
