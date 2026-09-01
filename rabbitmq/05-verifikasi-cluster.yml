@@ -109,17 +109,16 @@
           - jumlah_queue_type.stdout | trim == '1'
         fail_msg: "rabbitmq.conf tidak sesuai (harus ada default_queue_type) di {{ inventory_hostname }}"
 
-    - name: "Cek plugin management"
-      ansible.builtin.shell: rabbitmq-plugins list | grep management
+    - name: "Cek plugin management (marker [e]/[E] apa pun)"
+      ansible.builtin.shell: rabbitmq-plugins list | grep -E "\[[eE]\] rabbitmq_management "
       register: plugin_management
       changed_when: false
 
     - name: "Verifikasi plugin management enabled"
       ansible.builtin.assert:
         that:
-          - "'[e]' in plugin_management.stdout"
-          - "'rabbitmq_management' in plugin_management.stdout"
-        fail_msg: "Plugin management tidak enabled di {{ inventory_hostname }}"
+          - "plugin_management.stdout | trim | length > 0"
+        fail_msg: "Plugin management tidak enabled di {{ inventory_hostname }} (cek: rabbitmq-plugins enable rabbitmq_management)"
 
     # ---------- Vhost, user, permission ----------
     - name: "Ambil daftar vhost"
