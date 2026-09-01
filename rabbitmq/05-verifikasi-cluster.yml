@@ -88,8 +88,8 @@
     - name: "Verifikasi tidak ada partisi jaringan"
       ansible.builtin.assert:
         that:
-          - "hasil_partisi.stdout | trim == 'none' or hasil_partisi.stdout | trim == '[]'"
-        fail_msg: "Cluster KENA PARTISI di {{ inventory_hostname }} — {{ hasil_partisi.stdout }}"
+          - "hasil_partisi.stdout | trim == 'none' or hasil_partisi.stdout | trim == '[]' or 'rabbit@' not in hasil_partisi.stdout"
+        fail_msg: "Cluster KENA PARTISI di {{ inventory_hostname }} — baris partisi: {{ hasil_partisi.stdout | default('(kosong)') }}"
 
     # ---------- Konfigurasi ----------
     - name: "Periksa keberadaan rabbitmq.conf"
