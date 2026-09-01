@@ -1,0 +1,303 @@
+---
+# 05-verifikasi-cluster.yml — Verifikasi hasil fase 03 (cluster PostgreSQL HA: etcd + Patroni + PgBouncer)
+# Model 3 fase bkpm-ha-v2 — dipakai SETELAH fase 03 (dan 04), dan bisa dijalankan
+# KAPAN SAJA sebagai health check cluster (setelah reboot, sebelum demo, dsb).
+# Cek: service up (etcd/patroni/pgbouncer; postgresql.service harus MASKED),
+# hostname OS ip-10-192-*-*, /etc/hosts, etcd 3 member + 3/3 healthy, role
+# Patroni (tepat 1 leader), patronictl list, replikasi (pg_is_in_recovery,
+# walsender streaming ke leader), pool PgBouncer, konfigurasi + owner + mode,
+# port (2379/2380/5432/6432/8008).
+# BEDA DARI 04 (aksi buat user/db): playbook ini FAIL kalau cluster tidak
+# sehat — assert dipasang di kondisi kritis, jadi cocok jadi gate sebelum
+# lanjut. MURNI READ-ONLY: tidak mengubah konfigurasi apa pun.
+# PRASYARAT: fase 03a/03b/03c sudah jalan (etcd 3/3 + leader Patroni + PgBouncer).
+
+- name: "Verifikasi cluster PostgreSQL HA (etcd, Patroni, replikasi, PgBouncer)"
+  hosts: postgres
+  become: yes
+  gather_facts: no
+
+  tasks:
+    # ---------- Service ----------
+    - name: "Kumpulkan fakta status service systemd"
+      ansible.builtin.service_facts:
+
+    - name: "Verifikasi etcd, patroni, pgbouncer enabled + aktif"
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['etcd.service'].state == 'running'
+          - ansible_facts.services['etcd.service'].status == 'enabled'
+          - ansible_facts.services['patroni.service'].state == 'running'
+          - ansible_facts.services['patroni.service'].status == 'enabled'
+          - ansible_facts.services['pgbouncer.service'].state == 'running'
+          - ansible_facts.services['pgbouncer.service'].status == 'enabled'
+        fail_msg: "etcd / patroni / pgbouncer tidak enabled+running di {{ inventory_hostname }} (cek: systemctl status etcd patroni pgbouncer)"
+
+    - name: "Verifikasi postgresql.service MASKED (lifecycle dipegang Patroni)"
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['postgresql.service'].status == 'masked'
+        fail_msg: "postgresql.service harus MASKED di {{ inventory_hostname }} (jangan enable manual — Patroni yang pegang lifecycle PG)"
+
+    # ---------- Hostname OS & /etc/hosts ----------
+    - name: "Ambil hostname OS node ini"
+      ansible.builtin.command: hostname
+      register: hostname_os
+      changed_when: false
+
+    - name: "Verifikasi hostname OS sesuai pola ip-10-192-*-*"
+      ansible.builtin.assert:
+        that:
+          - "'ip-10-192-' in hostname_os.stdout"
+          - "'{{ hostvars[inventory_hostname].ansible_host | replace('.', '-') }}' in hostname_os.stdout"
+        fail_msg: "hostname OS {{ hostname_os.stdout }} tidak cocok pola ip-10-192-*-* (harus {{ 'ip-' ~ hostvars[inventory_hostname].ansible_host | replace('.', '-') }})"
+
+    - name: "Hitung entry nama OS di /etc/hosts"
+      ansible.builtin.shell: grep -c 'ip-10-192-' /etc/hosts || true
+      register: jumlah_hosts
+      changed_when: false
+
+    - name: "Verifikasi /etc/hosts memuat 3 entry ip-10-192-*-* (fase 01)"
+      ansible.builtin.assert:
+        that:
+          - (jumlah_hosts.stdout | trim | int) >= 3
+        fail_msg: "/etc/hosts belum berisi entry ip-10-192-*-* di {{ inventory_hostname }} (jalankan ulang fase 01)"
+
+    # ---------- etcd ----------
+    - name: "Susun daftar endpoint etcd (dari etcd_hosts, dengan skema http://)"
+      ansible.builtin.set_fact:
+        endpoint_etcd: "http://{{ etcd_hosts | replace(',', ',http://') }}"
+
+    - name: "Periksa kesehatan 3 endpoint etcd (tunggu 3/3 healthy, retry 60s)"
+      ansible.builtin.shell: >
+        etcdctl --endpoints={{ endpoint_etcd }} endpoint health 2>&1 | grep -c "is healthy" || true
+      register: sehat_etcd
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: sehat_etcd.stdout | trim == '3'
+
+    - name: "Ambil daftar member etcd"
+      ansible.builtin.shell: etcdctl --endpoints=http://127.0.0.1:2379 member list
+      register: member_etcd
+      changed_when: false
+      retries: 5
+      delay: 3
+      until: member_etcd.rc == 0
+
+    - name: "Hitung jumlah member etcd"
+      ansible.builtin.shell: etcdctl --endpoints=http://127.0.0.1:2379 member list | wc -l
+      register: jumlah_member
+      changed_when: false
+
+    - name: "Verifikasi etcd 3 member + 3/3 endpoint healthy"
+      ansible.builtin.assert:
+        that:
+          - sehat_etcd.stdout | trim == '3'
+          - jumlah_member.stdout | trim == '3'
+        fail_msg: "etcd cluster tidak sehat di {{ inventory_hostname }} (healthy={{ sehat_etcd.stdout | trim }}/3, member={{ jumlah_member.stdout | trim }})"
+
+    - name: "Periksa keberadaan data dir etcd"
+      ansible.builtin.stat:
+        path: "{{ etcd_data_dir }}"
+      register: stat_etcd_dir
+
+    - name: "Verifikasi data dir etcd ada, owner etcd, mode 0750"
+      ansible.builtin.assert:
+        that:
+          - stat_etcd_dir.stat.exists
+          - stat_etcd_dir.stat.pw_name == 'etcd'
+          - stat_etcd_dir.stat.mode == '0750'
+        fail_msg: "data dir etcd tidak sesuai (ada? owner? mode?) di {{ inventory_hostname }}"
+
+    # ---------- Patroni: peran per node ----------
+    - name: "Ambil status role node dari REST API Patroni (:8008/patroni)"
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8008/patroni"
+        return_content: true
+      register: status_patroni
+      failed_when: false
+
+    - name: "Simpan role node (leader/replica/unknown)"
+      ansible.builtin.set_fact:
+        patroni_role: "{{ (status_patroni.json | default({})).role | default('unknown') }}"
+
+    - name: "Verifikasi REST API Patroni aktif dan role node valid"
+      ansible.builtin.assert:
+        that:
+          - (status_patroni.status | default(0)) == 200
+          - patroni_role in ['leader', 'replica']
+        fail_msg: "REST API Patroni tidak sehat atau role tidak valid di {{ inventory_hostname }} (dapat: {{ patroni_role }})"
+
+    - name: "Susun daftar role seluruh node (dari fakta REST API)"
+      ansible.builtin.set_fact:
+        daftar_role: "{{ daftar_role | default([]) + [hostvars[item]['patroni_role']] }}"
+      loop: "{{ groups['postgres'] }}"
+
+    - name: "Verifikasi tepat 1 leader dan 2 replica di cluster"
+      ansible.builtin.assert:
+        that:
+          - (daftar_role | select('equalto', 'leader') | list | length) == 1
+          - (daftar_role | select('equalto', 'replica') | list | length) == 2
+        fail_msg: "Komposisi role cluster tidak sehat: {{ daftar_role | join(', ') }} (harus 1 leader + 2 replica)"
+
+    # ---------- Patroni: patronictl list ----------
+    - name: "Ambil daftar cluster Patroni (patronictl list, tunggu Leader terpilih)"
+      ansible.builtin.shell: "{{ patroni_venv }}/bin/patronictl -c {{ patroni_config }} list"
+      register: daftar_patroni
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: "'Leader' in daftar_patroni.stdout"
+
+    - name: "Hitung jumlah Leader di patronictl list"
+      ansible.builtin.shell: "{{ patroni_venv }}/bin/patronictl -c {{ patroni_config }} list | grep -c 'Leader' || true"
+      register: jumlah_leader
+      changed_when: false
+
+    - name: "Hitung jumlah replica di patronictl list"
+      ansible.builtin.shell: "{{ patroni_venv }}/bin/patronictl -c {{ patroni_config }} list | grep -ci 'replica' || true"
+      register: jumlah_replica
+      changed_when: false
+
+    - name: "Verifikasi patronictl list: 1 Leader + 2 replica"
+      ansible.builtin.assert:
+        that:
+          - jumlah_leader.stdout | trim == '1'
+          - jumlah_replica.stdout | trim == '2'
+        fail_msg: "patronictl list tidak sehat di {{ inventory_hostname }} (Leader={{ jumlah_leader.stdout | trim }}, replica={{ jumlah_replica.stdout | trim }})"
+
+    # ---------- PostgreSQL: replikasi ----------
+    - name: "Ambil status recovery node (pg_is_in_recovery)"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql -tAc "SELECT pg_is_in_recovery();"
+      register: pg_in_recovery
+      changed_when: false
+
+    - name: "Verifikasi leader TIDAK dalam recovery (bisa tulis)"
+      ansible.builtin.assert:
+        that:
+          - pg_in_recovery.stdout | trim == 'f'
+        fail_msg: "Leader {{ inventory_hostname }} masih dalam recovery (pg_is_in_recovery != f) — cek Patroni"
+      when: patroni_role == 'leader'
+
+    - name: "Verifikasi replica DALAM recovery (read-only)"
+      ansible.builtin.assert:
+        that:
+          - pg_in_recovery.stdout | trim == 't'
+        fail_msg: "Replica {{ inventory_hostname }} tidak dalam recovery (pg_is_in_recovery != t) — cek Patroni"
+      when: patroni_role == 'replica'
+
+    - name: "Hitung walsender streaming di leader (dari pg_stat_replication)"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql -tAc
+        "SELECT count(*) FROM pg_stat_replication WHERE state='streaming';"
+      register: jumlah_walsender
+      changed_when: false
+      when: patroni_role == 'leader'
+
+    - name: "Verifikasi 2 replica streaming ke leader"
+      ansible.builtin.assert:
+        that:
+          - jumlah_walsender.stdout | trim == '2'
+        fail_msg: "Leader {{ inventory_hostname }} hanya punya {{ jumlah_walsender.stdout | trim }} walsender streaming (harus 2) — cek replikasi"
+      when: patroni_role == 'leader'
+
+    # ---------- PgBouncer ----------
+    - name: "Ambil status pool PgBouncer (SHOW POOLS via :6432)"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql -h 127.0.0.1 -p 6432
+        -U postgres -d pgbouncer -tAc "SHOW POOLS;"
+      register: show_pools
+      changed_when: false
+      failed_when: false
+
+    - name: "Verifikasi pool PgBouncer aktif (SHOW POOLS tidak kosong)"
+      ansible.builtin.assert:
+        that:
+          - show_pools.stdout | trim | length > 0
+        fail_msg: "SHOW POOLS kosong di {{ inventory_hostname }} — PgBouncer tidak punya pool ke PG lokal (cek .pgpass user postgres / config 03c)"
+
+    - name: "Periksa keberadaan dan kepemilikan userlist.txt"
+      ansible.builtin.stat:
+        path: /etc/pgbouncer/userlist.txt
+      register: stat_userlist
+
+    - name: "Verifikasi userlist.txt ada, owner postgres, mode 0640"
+      ansible.builtin.assert:
+        that:
+          - stat_userlist.stat.exists
+          - stat_userlist.stat.pw_name == 'postgres'
+          - stat_userlist.stat.gr_name == 'postgres'
+          - stat_userlist.stat.mode == '0640'
+        fail_msg: "userlist.txt tidak sesuai (ada? owner? mode?) di {{ inventory_hostname }}"
+
+    # ---------- Konfigurasi ----------
+    - name: "Periksa keberadaan patroni.yml dan unit etcd"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: stat_config
+      loop:
+        - "{{ patroni_config }}"
+        - /etc/systemd/system/etcd.service
+
+    - name: "Verifikasi patroni.yml dan unit etcd ada"
+      ansible.builtin.assert:
+        that:
+          - stat_config.results[0].stat.exists
+          - stat_config.results[1].stat.exists
+        fail_msg: "patroni.yml atau unit etcd.service hilang di {{ inventory_hostname }} (jalankan ulang fase 03a/03b)"
+
+    - name: "Verifikasi kepemilikan patroni.yml (postgres, mode 0640)"
+      ansible.builtin.assert:
+        that:
+          - stat_config.results[0].stat.pw_name == 'postgres'
+          - stat_config.results[0].stat.gr_name == 'postgres'
+          - stat_config.results[0].stat.mode == '0640'
+        fail_msg: "patroni.yml tidak sesuai owner/mode di {{ inventory_hostname }}"
+
+    - name: "Periksa keberadaan data dir PostgreSQL"
+      ansible.builtin.stat:
+        path: "{{ patroni_data_dir }}"
+      register: stat_pg_dir
+
+    - name: "Verifikasi data dir PostgreSQL ada, owner postgres"
+      ansible.builtin.assert:
+        that:
+          - stat_pg_dir.stat.exists
+          - stat_pg_dir.stat.pw_name == 'postgres'
+          - stat_pg_dir.stat.gr_name == 'postgres'
+        fail_msg: "data dir PostgreSQL tidak sesuai di {{ inventory_hostname }}"
+
+    # ---------- Port ----------
+    - name: "Periksa port mendengarkan"
+      ansible.builtin.command: ss -ltn
+      register: port_listen
+      changed_when: false
+
+    - name: "Verifikasi port etcd (2379/2380), PG (5432), PgBouncer (6432), Patroni REST (8008) listening"
+      ansible.builtin.assert:
+        that:
+          - "':2379' in port_listen.stdout"
+          - "':2380' in port_listen.stdout"
+          - "':5432' in port_listen.stdout"
+          - "':6432' in port_listen.stdout"
+          - "':8008' in port_listen.stdout"
+        fail_msg: "Salah satu port (2379/2380/5432/6432/8008) tidak listening di {{ inventory_hostname }}"
+
+    # ---------- Ringkasan ----------
+    - name: "Tampilkan ringkasan verifikasi cluster per node"
+      ansible.builtin.debug:
+        msg:
+          - "HOST: {{ inventory_hostname }}"
+          - "etcd: state={{ ansible_facts.services['etcd.service'].state | default('?') }}, status={{ ansible_facts.services['etcd.service'].status | default('?') }}"
+          - "patroni: state={{ ansible_facts.services['patroni.service'].state | default('?') }}, status={{ ansible_facts.services['patroni.service'].status | default('?') }}"
+          - "pgbouncer: state={{ ansible_facts.services['pgbouncer.service'].state | default('?') }}, status={{ ansible_facts.services['pgbouncer.service'].status | default('?') }}"
+          - "postgresql.service (harus masked): status={{ ansible_facts.services['postgresql.service'].status | default('?') }}"
+          - "Hostname OS: {{ hostname_os.stdout | default('GAGAL') }}"
+          - "etcd: healthy={{ sehat_etcd.stdout | trim }}/3, member={{ jumlah_member.stdout | trim }}"
+          - "Role Patroni: {{ patroni_role }} (cluster: {{ daftar_role | join(', ') }})"
+          - "pg_is_in_recovery: {{ pg_in_recovery.stdout | trim }}"
+          - "patronictl: Leader={{ jumlah_leader.stdout | trim }}, replica={{ jumlah_replica.stdout | trim }}"
+          - "Walsender streaming (leader): {{ jumlah_walsender.stdout | default('n/a (bukan leader)') | trim }}"
+          - "SHOW POOLS: {{ show_pools.stdout_lines | join(' | ') }}"
