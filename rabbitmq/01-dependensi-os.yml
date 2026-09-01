@@ -14,12 +14,13 @@
     #   ansible.builtin.hostname:
     #     name: "{{ inventory_hostname }}"
     #   (di-comment: EC2 hostname dikelola cloud-init — set manual revert pas reboot,
-    #    lihat CATATAN di header. /etc/hosts tetap diisi supaya resolusi nama rb-* jalan.)
+    #    lihat CATATAN di header. /etc/hosts tetap diisi: alias rb-* (SSH) +
+    #    hostname OS ip-10-192-*-* (resolusi nodename erlang rabbit@ip-*).)
 
-    - name: "Pastikan entry ketiga node di /etc/hosts"
+    - name: "Pastikan entry ketiga node di /etc/hosts (alias rb-* + hostname OS)"
       ansible.builtin.lineinfile:
         path: /etc/hosts
-        line: "{{ hostvars[item].ansible_host }} {{ item }}"
+        line: "{{ hostvars[item].ansible_host }} {{ item }} {{ hostvars[item].ansible_hostname }}"
         regexp: "^{{ hostvars[item].ansible_host }} "
       loop: "{{ groups['rabbitmq'] }}"
 
