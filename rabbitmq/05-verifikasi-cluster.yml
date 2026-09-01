@@ -79,8 +79,8 @@
           - "'{{ daftar_nodename[2] }}' in status_cluster.stdout"
         fail_msg: "Cluster belum 3 node running di {{ inventory_hostname }} — cek: rabbitmqctl cluster_status"
 
-    - name: "Ambil baris partisi dari cluster_status"
-      ansible.builtin.shell: rabbitmqctl cluster_status | grep -i partitions
+    - name: "Ambil baris partisi dari cluster_status (header + nilai)"
+      ansible.builtin.shell: rabbitmqctl cluster_status | grep -i -A1 partitions
       register: hasil_partisi
       changed_when: false
       failed_when: false
