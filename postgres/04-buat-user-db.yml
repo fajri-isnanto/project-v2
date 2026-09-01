@@ -3,7 +3,7 @@
 # Model 3 fase bkpm-ha-v2 — REUSABLE: jalanin ulang buat app lain dengan --extra-vars.
 #
 # ALUR:
-#   1. Deteksi leader via REST API Patroni (:8008/patroni, role=leader)
+#   1. Deteksi leader via REST API Patroni (curl --noproxy :8008/patroni, role=leader)
 #   2. CREATE ROLE + CREATE DATABASE di LEADER (DDL masuk WAL -> otomatis ke replica)
 #   3. Daftarkan user ke userlist.txt PgBouncer di SEMUA node (SCRAM secret
 #      ditarik dari pg_authid, bukan plaintext) + reload pgbouncer
@@ -38,16 +38,16 @@
     app_db_create: true              # playbook ikut bikin db-nya (owner = user)
     app_db_via_pgbouncer: true       # daftarkan ke userlist.txt + reload pgbouncer
   tasks:
-    - name: "Ambil status role node dari REST API Patroni"
-      ansible.builtin.uri:
-        url: "http://127.0.0.1:8008/patroni"
-        return_content: true
+    - name: "Ambil status role node dari REST API Patroni (:8008/patroni, via curl)"
+      ansible.builtin.command:
+        cmd: curl -s --noproxy '*' --max-time 5 http://127.0.0.1:8008/patroni
       register: status_patroni
+      changed_when: false
       failed_when: false
 
-    - name: "Simpan role node (leader/replica/unknown) — parse body, bukan .json"
+    - name: "Simpan role node (leader/replica/unknown) — parse stdout JSON"
       ansible.builtin.set_fact:
-        node_role: "{{ (status_patroni.content | default('{}') | from_json).role | default('unknown') }}"
+        node_role: "{{ (status_patroni.stdout | default('{}', true) | from_json).role | default('unknown') }}"
 
     - name: "Daftarkan node leader ke grup dinamis pg_leader"
       ansible.builtin.add_host:
@@ -60,20 +60,24 @@
   gather_facts: false
   become: false
   tasks:
-    - name: "Tampilkan role hasil deteksi tiap node"
+    - name: "Tampilkan role + status curl hasil deteksi tiap node"
       ansible.builtin.debug:
-        msg: "{{ item }} -> role={{ hostvars[item].node_role | default('?') }}"
+        msg: "{{ item }} -> role={{ hostvars[item].node_role | default('?') }} (curl rc={{ hostvars[item].status_patroni.rc | default('?') }})"
       loop: "{{ groups['postgres'] }}"
 
     - name: "Verifikasi tepat 1 node terdeteksi sebagai leader"
       ansible.builtin.assert:
         that:
-          - groups['pg_leader'] | length == 1
+          - (groups['postgres'] | map('extract', hostvars, 'node_role') | select('equalto', 'leader') | list | length) == 1
+          - (groups.get('pg_leader', []) | length) == 1
         fail_msg: >-
-          Leader Patroni TIDAK terdeteksi (grup pg_leader kosong) — role di
-          atas semua 'unknown'. Cek manual di tiap node:
-          curl -s http://127.0.0.1:8008/patroni — harus ada node dengan
-          role=leader. Kalau REST API mati: systemctl status patroni.
+          Leader Patroni TIDAK terdeteksi. Baca output debug di atas:
+          - curl rc != 0 di semua node -> REST API Patroni mati/beda port:
+            systemctl status patroni; curl -s http://127.0.0.1:8008/patroni.
+          - curl rc = 0 tapi role 'unknown' -> isi JSON respons tidak sesuai
+            (harus ada field role=leader/replica).
+          - role=leader terdeteksi tapi grup pg_leader kosong -> masalah
+            add_host/groups di versi ansible node1 (naikkan ansible-core).
 
 - name: "Fase 4 - Buat role dan database aplikasi di leader"
   hosts: pg_leader
@@ -154,7 +158,7 @@
   tasks:
     - name: "Simpan nama leader (dari grup dinamis, task-level)"
       ansible.builtin.set_fact:
-        pg_leader_name: "{{ groups['pg_leader'] | first }}"
+        pg_leader_name: "{{ groups.get('pg_leader', []) | first }}"
 
     - name: "Tulis atau perbarui entry user aplikasi di userlist.txt"
       ansible.builtin.lineinfile:
