@@ -1,0 +1,201 @@
+---
+# 05-verifikasi-cluster.yml — Verifikasi hasil fase 03 (cluster RabbitMQ)
+# Model 3 fase bkpm-ha-v2 — dipakai SETELAH fase 03, dan bisa dijalankan KAPAN SAJA
+# sebagai health check cluster (setelah reboot, sebelum demo, dsb).
+# Cek: service up, versi, nodename erlang sesuai hostname OS, cluster 3 node
+# running tanpa partisi, vhost/user/permission, config quorum, plugin, port.
+# BEDA DARI 04 (informatif): playbook ini FAIL kalau cluster tidak sehat —
+# assert dipasang di kondisi kritis, jadi cocok jadi gate sebelum lanjut.
+# CATATAN EC2: nodename = rabbit@ip-<hostname OS> (bukan rb-*). Daftar nodename
+# yang diharapkan disusun otomatis dari ansible_host tiap node (10.x.x.x ->
+# ip-10-x-x-x), jadi tidak perlu hardcode.
+
+- name: "Verifikasi cluster RabbitMQ (node, quorum, vhost, user, config)"
+  hosts: rabbitmq
+  become: yes
+  gather_facts: no
+
+  tasks:
+    # ---------- Service ----------
+    - name: "Kumpulkan fakta status service systemd"
+      ansible.builtin.service_facts:
+
+    - name: "Verifikasi rabbitmq-server enabled + aktif"
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['rabbitmq-server.service'].state == 'running'
+          - ansible_facts.services['rabbitmq-server.service'].status == 'enabled'
+        fail_msg: "rabbitmq-server tidak running/enabled di {{ inventory_hostname }} (cek: systemctl status rabbitmq-server)"
+
+    # ---------- Versi & nodename ----------
+    - name: "Ambil versi broker"
+      ansible.builtin.command: rabbitmqctl version
+      register: versi_broker
+      changed_when: false
+
+    - name: "Verifikasi versi broker sesuai pin ({{ rabbitmq_version.split('-')[0] }})"
+      ansible.builtin.assert:
+        that:
+          - versi_broker.stdout | trim == "{{ rabbitmq_version.split('-')[0] }}"
+        fail_msg: "Versi broker tidak sesuai pin — dapat {{ versi_broker.stdout | trim }}"
+
+    - name: "Ambil hostname OS node ini"
+      ansible.builtin.command: hostname
+      register: hostname_os
+      changed_when: false
+
+    - name: "Ambil nodename erlang node ini"
+      ansible.builtin.shell: rabbitmqctl eval 'node().'
+      register: nodename_node
+      changed_when: false
+
+    - name: "Verifikasi nodename erlang = rabbit@<hostname OS>"
+      ansible.builtin.assert:
+        that:
+          - "'rabbit@' in nodename_node.stdout"
+          - "'{{ hostname_os.stdout }}' in nodename_node.stdout"
+        fail_msg: "Nodename tidak cocok hostname OS di {{ inventory_hostname }} — dapat {{ nodename_node.stdout }} (EC2: nodename = rabbit@ip-10-192-*-*)"
+
+    # ---------- Cluster ----------
+    - name: "Susun daftar nodename erlang yang diharapkan (dari ansible_host tiap node)"
+      ansible.builtin.set_fact:
+        daftar_nodename: "{{ daftar_nodename | default([]) + ['rabbit@ip-' ~ (hostvars[item].ansible_host | replace('.', '-'))] }}"
+      loop: "{{ groups['rabbitmq'] }}"
+
+    - name: "Ambil status cluster (tunggu ketiga node terdaftar)"
+      ansible.builtin.command: rabbitmqctl cluster_status
+      register: status_cluster
+      changed_when: false
+      retries: 5
+      delay: 3
+      until: "'{{ daftar_nodename[0] }}' in status_cluster.stdout and '{{ daftar_nodename[1] }}' in status_cluster.stdout and '{{ daftar_nodename[2] }}' in status_cluster.stdout"
+
+    - name: "Verifikasi cluster 3 node running"
+      ansible.builtin.assert:
+        that:
+          - "'Running Nodes' in status_cluster.stdout"
+          - "'{{ daftar_nodename[0] }}' in status_cluster.stdout"
+          - "'{{ daftar_nodename[1] }}' in status_cluster.stdout"
+          - "'{{ daftar_nodename[2] }}' in status_cluster.stdout"
+        fail_msg: "Cluster belum 3 node running di {{ inventory_hostname }} — cek: rabbitmqctl cluster_status"
+
+    - name: "Ambil baris partisi dari cluster_status"
+      ansible.builtin.shell: rabbitmqctl cluster_status | grep -i partitions
+      register: hasil_partisi
+      changed_when: false
+      failed_when: false
+
+    - name: "Verifikasi tidak ada partisi jaringan"
+      ansible.builtin.assert:
+        that:
+          - "'none' in hasil_partisi.stdout or '[]' in hasil_partisi.stdout"
+        fail_msg: "Cluster KENA PARTISI di {{ inventory_hostname }} — {{ hasil_partisi.stdout }}"
+
+    # ---------- Konfigurasi ----------
+    - name: "Periksa keberadaan rabbitmq.conf"
+      ansible.builtin.stat:
+        path: /etc/rabbitmq/rabbitmq.conf
+      register: stat_rabbitmq_conf
+
+    - name: "Hitung direktif default_queue_type di rabbitmq.conf"
+      ansible.builtin.shell: grep -c '^default_queue_type' /etc/rabbitmq/rabbitmq.conf || true
+      register: jumlah_queue_type
+      changed_when: false
+
+    - name: "Verifikasi rabbitmq.conf ada dengan default_queue_type quorum"
+      ansible.builtin.assert:
+        that:
+          - stat_rabbitmq_conf.stat.exists
+          - jumlah_queue_type.stdout | trim == '1'
+        fail_msg: "rabbitmq.conf tidak sesuai (harus ada default_queue_type) di {{ inventory_hostname }}"
+
+    - name: "Cek plugin management"
+      ansible.builtin.shell: rabbitmq-plugins list | grep management
+      register: plugin_management
+      changed_when: false
+
+    - name: "Verifikasi plugin management enabled"
+      ansible.builtin.assert:
+        that:
+          - "'[e]' in plugin_management.stdout"
+          - "'rabbitmq_management' in plugin_management.stdout"
+        fail_msg: "Plugin management tidak enabled di {{ inventory_hostname }}"
+
+    # ---------- Vhost, user, permission ----------
+    - name: "Ambil daftar vhost"
+      ansible.builtin.command: rabbitmqctl list_vhosts
+      register: daftar_vhost
+      changed_when: false
+
+    - name: "Verifikasi vhost aplikasi ({{ rabbitmq_vhost }}) ada"
+      ansible.builtin.assert:
+        that:
+          - "'{{ rabbitmq_vhost }}' in daftar_vhost.stdout"
+        fail_msg: "Vhost {{ rabbitmq_vhost }} tidak ada di {{ inventory_hostname }}"
+
+    - name: "Ambil daftar user"
+      ansible.builtin.command: rabbitmqctl list_users
+      register: daftar_user
+      changed_when: false
+
+    - name: "Verifikasi user aplikasi, admin, dan tag administrator"
+      ansible.builtin.assert:
+        that:
+          - "'{{ rabbitmq_app_user }}' in daftar_user.stdout"
+          - "'{{ rabbitmq_admin_user }}' in daftar_user.stdout"
+          - "'administrator' in daftar_user.stdout"
+        fail_msg: "User app/admin atau tag administrator belum ada di {{ inventory_hostname }}"
+
+    - name: "Ambil permission di vhost {{ rabbitmq_vhost }}"
+      ansible.builtin.command: rabbitmqctl list_permissions -p {{ rabbitmq_vhost }}
+      register: daftar_permission
+      changed_when: false
+
+    - name: "Verifikasi user aplikasi punya permission di vhost"
+      ansible.builtin.assert:
+        that:
+          - "'{{ rabbitmq_app_user }}' in daftar_permission.stdout"
+        fail_msg: "Permission app-rabbitmq di vhost {{ rabbitmq_vhost }} belum ada"
+
+    # ---------- Port & cookie ----------
+    - name: "Periksa port mendengarkan"
+      ansible.builtin.command: ss -ltn
+      register: port_listen
+      changed_when: false
+
+    - name: "Verifikasi port AMQP, management, epmd, dan distribusi"
+      ansible.builtin.assert:
+        that:
+          - "':5672' in port_listen.stdout"
+          - "':15672' in port_listen.stdout"
+          - "':4369' in port_listen.stdout"
+          - "':25672' in port_listen.stdout"
+        fail_msg: "Salah satu port (5672/15672/4369/25672) tidak listening di {{ inventory_hostname }}"
+
+    - name: "Periksa keberadaan dan kepemilikan .erlang.cookie"
+      ansible.builtin.stat:
+        path: /var/lib/rabbitmq/.erlang.cookie
+      register: stat_cookie
+
+    - name: "Verifikasi .erlang.cookie ada, owner rabbitmq, mode 0400"
+      ansible.builtin.assert:
+        that:
+          - stat_cookie.stat.exists
+          - stat_cookie.stat.pw_name == 'rabbitmq'
+          - stat_cookie.stat.gr_name == 'rabbitmq'
+          - stat_cookie.stat.mode == '0400'
+        fail_msg: ".erlang.cookie tidak sesuai di {{ inventory_hostname }}"
+
+    # ---------- Ringkasan ----------
+    - name: "Tampilkan ringkasan verifikasi cluster per node"
+      ansible.builtin.debug:
+        msg:
+          - "HOST: {{ inventory_hostname }}"
+          - "rabbitmq-server: state={{ ansible_facts.services['rabbitmq-server.service'].state | default('?') }}, status={{ ansible_facts.services['rabbitmq-server.service'].status | default('?') }}"
+          - "Versi: {{ versi_broker.stdout | default('GAGAL') }}"
+          - "Nodename: {{ nodename_node.stdout | default('GAGAL') }} (hostname OS: {{ hostname_os.stdout }})"
+          - "Cluster ({{ daftar_nodename | length }} node): {{ daftar_nodename | join(', ') }}"
+          - "Partisi: {{ hasil_partisi.stdout | default('?') }}"
+          - "Vhost: {{ daftar_vhost.stdout_lines | join(', ') }}"
+          - "User: {{ daftar_user.stdout_lines | join(' | ') }}"
+          - "Plugin management: {{ plugin_management.stdout_lines | select('search', '[e]') | list | join(' | ') }}"
