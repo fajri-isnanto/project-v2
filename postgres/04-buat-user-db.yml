@@ -45,15 +45,35 @@
       register: status_patroni
       failed_when: false
 
-    - name: "Simpan role node (leader/replica/unknown)"
+    - name: "Simpan role node (leader/replica/unknown) — parse body, bukan .json"
       ansible.builtin.set_fact:
-        node_role: "{{ (status_patroni.json | default({})).role | default('unknown') }}"
+        node_role: "{{ (status_patroni.content | default('{}') | from_json).role | default('unknown') }}"
 
     - name: "Daftarkan node leader ke grup dinamis pg_leader"
       ansible.builtin.add_host:
         name: "{{ inventory_hostname }}"
         groups: pg_leader
       when: node_role == 'leader'
+
+- name: "Fase 4 - Pastikan leader terdeteksi (gate sebelum eksekusi)"
+  hosts: localhost
+  gather_facts: false
+  become: false
+  tasks:
+    - name: "Tampilkan role hasil deteksi tiap node"
+      ansible.builtin.debug:
+        msg: "{{ item }} -> role={{ hostvars[item].node_role | default('?') }}"
+      loop: "{{ groups['postgres'] }}"
+
+    - name: "Verifikasi tepat 1 node terdeteksi sebagai leader"
+      ansible.builtin.assert:
+        that:
+          - groups['pg_leader'] | length == 1
+        fail_msg: >-
+          Leader Patroni TIDAK terdeteksi (grup pg_leader kosong) — role di
+          atas semua 'unknown'. Cek manual di tiap node:
+          curl -s http://127.0.0.1:8008/patroni — harus ada node dengan
+          role=leader. Kalau REST API mati: systemctl status patroni.
 
 - name: "Fase 4 - Buat role dan database aplikasi di leader"
   hosts: pg_leader
@@ -131,8 +151,11 @@
     app_db_createdb: true
     app_db_create: true
     app_db_via_pgbouncer: true
-    pg_leader_name: "{{ groups['pg_leader'][0] }}"
   tasks:
+    - name: "Simpan nama leader (dari grup dinamis, task-level)"
+      ansible.builtin.set_fact:
+        pg_leader_name: "{{ groups['pg_leader'] | first }}"
+
     - name: "Tulis atau perbarui entry user aplikasi di userlist.txt"
       ansible.builtin.lineinfile:
         path: /etc/pgbouncer/userlist.txt
