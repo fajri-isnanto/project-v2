@@ -109,16 +109,16 @@
           - jumlah_queue_type.stdout | trim == '1'
         fail_msg: "rabbitmq.conf tidak sesuai (harus ada default_queue_type) di {{ inventory_hostname }}"
 
-    - name: "Cek plugin management (marker [e]/[E] apa pun)"
-      ansible.builtin.shell: rabbitmq-plugins list | grep -E "\[[eE]\] rabbitmq_management "
-      register: plugin_management
-      changed_when: false
+    - name: "Periksa daftar plugin yang di-enable (file enabled_plugins)"
+      ansible.builtin.slurp:
+        src: /etc/rabbitmq/enabled_plugins
+      register: isi_enabled_plugins
 
-    - name: "Verifikasi plugin management enabled"
+    - name: "Verifikasi rabbitmq_management terdaftar di enabled_plugins"
       ansible.builtin.assert:
         that:
-          - "plugin_management.stdout | trim | length > 0"
-        fail_msg: "Plugin management tidak enabled di {{ inventory_hostname }} (cek: rabbitmq-plugins enable rabbitmq_management)"
+          - "'rabbitmq_management' in (isi_enabled_plugins.content | b64decode)"
+        fail_msg: "rabbitmq_management tidak ada di /etc/rabbitmq/enabled_plugins di {{ inventory_hostname }} (cek: rabbitmq-plugins enable rabbitmq_management)"
 
     # ---------- Vhost, user, permission ----------
     - name: "Ambil daftar vhost"
@@ -197,4 +197,4 @@
           - "Partisi: {{ hasil_partisi.stdout | default('?') }}"
           - "Vhost: {{ daftar_vhost.stdout_lines | join(', ') }}"
           - "User: {{ daftar_user.stdout_lines | join(' | ') }}"
-          - "Plugin management: {{ plugin_management.stdout_lines | select('search', '[e]') | list | join(' | ') }}"
+          - "Plugin enabled_plugins: {{ isi_enabled_plugins.content | b64decode | trim }}"
