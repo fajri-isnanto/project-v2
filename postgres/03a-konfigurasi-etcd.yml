@@ -71,7 +71,7 @@
   become: yes
   tasks:
     - name: "Tunggu 3/3 endpoint healthy (retry maks 60s)"
-      ansible.builtin.shell: etcdctl --endpoints=http://pg-1:2379,http://pg-2:2379,http://pg-3:2379 endpoint health
+      ansible.builtin.shell: etcdctl --endpoints=http://10.192.66.230:2379,http://10.192.67.65:2379,http://10.192.67.184:2379 endpoint health
       register: ep_health
       changed_when: false
       retries: 12
@@ -84,7 +84,7 @@
       changed_when: false
 
     - name: "etcdctl endpoint health (tabel)"
-      ansible.builtin.shell: etcdctl --endpoints=http://pg-1:2379,http://pg-2:2379,http://pg-3:2379 endpoint health -w table
+      ansible.builtin.shell: etcdctl --endpoints=http://10.192.66.230:2379,http://10.192.67.65:2379,http://10.192.67.184:2379 endpoint health -w table
       register: ep_health_table
       changed_when: false
       failed_when: false

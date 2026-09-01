@@ -11,8 +11,9 @@ restapi:
   connect_address: 10.192.66.230:8008
 
 # etcd v3 (client python etcd3). Port 2379 = client.
+# URL pakai IP langsung (bukan hostname) — ga butuh /etc/hosts buat resolve.
 etcd3:
-  hosts: pg-1:2379,pg-2:2379,pg-3:2379
+  hosts: 10.192.66.230:2379,10.192.67.65:2379,10.192.67.184:2379
 
 bootstrap:
   dcs:

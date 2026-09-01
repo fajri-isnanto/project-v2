@@ -1,6 +1,9 @@
 ---
 # 01-dependensi-os.yml — Fase 1: dependensi level OS untuk PostgreSQL HA
-# Model 3 fase bkpm-ha-v2 — hasil akhir: paket dasar + resolusi nama node siap
+# Model 3 fase bkpm-ha-v2 — hasil akhir: paket dasar + hostname OS resolve
+# KEBIJAKAN NAMA: hostname OS = ip-10-192-*-* (cloud-init, turunan private IPv4).
+# Semua URL (etcd/Patroni/etc) pakai IP langsung, BUKAN hostname — /etc/hosts
+# cukup isi IP -> ip-10-192-*-* (nama OS resolve, hostname -f jalan).
 # CATATAN: fase hygiene (machine-id, SSH key) TIDAK termasuk — keputusan diskusi
 # (sumber: pg-02/03/04 lama — bagian OS deps dipisah)
 
@@ -28,10 +31,10 @@
           - build-essential
         state: present
 
-    - name: "Pastikan entry hostname ketiga node di /etc/hosts (resolusi nama etcd/patroni)"
+    - name: "Pastikan entry hostname OS tiap node di /etc/hosts (nama cloud-init ip-10-192-*-*)"
       ansible.builtin.lineinfile:
         path: /etc/hosts
-        line: "{{ hostvars[item].ansible_host }} {{ item }}"
+        line: "{{ hostvars[item].ansible_host }} ip-{{ hostvars[item].ansible_host | replace('.', '-') }}"
         regexp: "^{{ hostvars[item].ansible_host }} "
       loop: "{{ groups['postgres'] }}"
 

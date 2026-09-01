@@ -18,7 +18,8 @@ etcd_arch: "amd64"
 etcd_user: "etcd"
 etcd_data_dir: "/var/lib/etcd"
 etcd_cluster_token: "pg-ha-etcd-cluster"
-etcd_hosts: "pg-1:2379,pg-2:2379,pg-3:2379"
+# URL pakai IP (bukan hostname) — konsisten dgn files/patroni.yml.pg-N
+etcd_hosts: "10.192.66.230:2379,10.192.67.65:2379,10.192.67.184:2379"
 
 # IP statis tiap node (wajib sama dgn inventory.ini)
 pg_node_ip:
