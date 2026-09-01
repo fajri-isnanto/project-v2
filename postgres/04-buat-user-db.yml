@@ -3,7 +3,8 @@
 # Model 3 fase bkpm-ha-v2 — REUSABLE: jalanin ulang buat app lain dengan --extra-vars.
 #
 # ALUR:
-#   1. Deteksi leader via REST API Patroni (curl --noproxy :8008/patroni, role=leader)
+#   1. Deteksi leader via REST API Patroni (curl --noproxy :8008/patroni;
+#      Patroni 4.x mengembalikan role=primary, dinormalisasi jadi leader)
 #   2. CREATE ROLE + CREATE DATABASE di LEADER (DDL masuk WAL -> otomatis ke replica)
 #   3. Daftarkan user ke userlist.txt PgBouncer di SEMUA node (SCRAM secret
 #      ditarik dari pg_authid, bukan plaintext) + reload pgbouncer
@@ -45,9 +46,13 @@
       changed_when: false
       failed_when: false
 
-    - name: "Simpan role node (leader/replica/unknown) — parse stdout JSON"
+    - name: "Simpan role mentah dari REST API"
       ansible.builtin.set_fact:
-        node_role: "{{ (status_patroni.stdout | default('{}', true) | from_json).role | default('unknown') }}"
+        patroni_role_raw: "{{ (status_patroni.stdout | default('{}', true) | from_json).role | default('unknown') }}"
+
+    - name: "Normalisasi role (Patroni 4.x: REST API pakai 'primary', bukan 'leader')"
+      ansible.builtin.set_fact:
+        node_role: "{{ 'leader' if patroni_role_raw in ['leader', 'primary'] else patroni_role_raw }}"
 
     - name: "Daftarkan node leader ke grup dinamis pg_leader"
       ansible.builtin.add_host:
@@ -75,7 +80,7 @@
           - curl rc != 0 di semua node -> REST API Patroni mati/beda port:
             systemctl status patroni; curl -s http://127.0.0.1:8008/patroni.
           - curl rc = 0 tapi role 'unknown' -> isi JSON respons tidak sesuai
-            (harus ada field role=leader/replica).
+            (harus ada field role; Patroni 4.x memakai primary/replica).
           - role=leader terdeteksi tapi grup pg_leader kosong -> masalah
             add_host/groups di versi ansible node1 (naikkan ansible-core).
 

@@ -111,23 +111,27 @@
         fail_msg: "data dir etcd tidak sesuai (ada? owner? mode?) di {{ inventory_hostname }}"
 
     # ---------- Patroni: peran per node ----------
-    - name: "Ambil status role node dari REST API Patroni (:8008/patroni)"
-      ansible.builtin.uri:
-        url: "http://127.0.0.1:8008/patroni"
-        return_content: true
+    - name: "Ambil status role node dari REST API Patroni (:8008/patroni, via curl)"
+      ansible.builtin.command:
+        cmd: curl -s --noproxy '*' --max-time 5 http://127.0.0.1:8008/patroni
       register: status_patroni
+      changed_when: false
       failed_when: false
 
-    - name: "Simpan role node (leader/replica/unknown)"
+    - name: "Simpan role mentah dari REST API"
       ansible.builtin.set_fact:
-        patroni_role: "{{ (status_patroni.json | default({})).role | default('unknown') }}"
+        patroni_role_raw: "{{ (status_patroni.stdout | default('{}', true) | from_json).role | default('unknown') }}"
+
+    - name: "Normalisasi role (Patroni 4.x: REST API pakai 'primary', bukan 'leader')"
+      ansible.builtin.set_fact:
+        patroni_role: "{{ 'leader' if patroni_role_raw in ['leader', 'primary'] else patroni_role_raw }}"
 
     - name: "Verifikasi REST API Patroni aktif dan role node valid"
       ansible.builtin.assert:
         that:
-          - (status_patroni.status | default(0)) == 200
+          - (status_patroni.rc | default(1)) == 0
           - patroni_role in ['leader', 'replica']
-        fail_msg: "REST API Patroni tidak sehat atau role tidak valid di {{ inventory_hostname }} (dapat: {{ patroni_role }})"
+        fail_msg: "REST API Patroni tidak sehat atau role tidak valid di {{ inventory_hostname }} (rc={{ status_patroni.rc | default('?') }}, role={{ patroni_role }})"
 
     - name: "Susun daftar role seluruh node (dari fakta REST API)"
       ansible.builtin.set_fact:
