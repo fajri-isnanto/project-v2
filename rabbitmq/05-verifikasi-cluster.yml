@@ -9,6 +9,10 @@
 # CATATAN EC2: nodename = rabbit@ip-<hostname OS> (bukan rb-*). Daftar nodename
 # yang diharapkan disusun otomatis dari ansible_host tiap node (10.x.x.x ->
 # ip-10-x-x-x), jadi tidak perlu hardcode.
+# CATATAN FORMAT (RabbitMQ 4.2.9): output "rabbitmq-plugins list" memakai
+# "[E*]" = enabled eksplisit + running, "[e*]" = implicit + running (bukan
+# "[E]" seperti 3.x). Makanya cek plugin di playbook ini pakai file
+# /etc/rabbitmq/enabled_plugins (sumber kebenaran), bukan parse output list.
 
 - name: "Verifikasi cluster RabbitMQ (node, quorum, vhost, user, config)"
   hosts: rabbitmq
