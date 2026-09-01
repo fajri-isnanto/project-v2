@@ -1,0 +1,192 @@
+---
+# 04-buat-user-db.yml — Fase 4: buat role + database aplikasi di cluster Patroni
+# Model 3 fase bkpm-ha-v2 — REUSABLE: jalanin ulang buat app lain dengan --extra-vars.
+#
+# ALUR:
+#   1. Deteksi leader via REST API Patroni (:8008/patroni, role=leader)
+#   2. CREATE ROLE + CREATE DATABASE di LEADER (DDL masuk WAL -> otomatis ke replica)
+#   3. Daftarkan user ke userlist.txt PgBouncer di SEMUA node (SCRAM secret
+#      ditarik dari pg_authid, bukan plaintext) + reload pgbouncer
+#   4. Verify login dari leader (direct :5432 + pgbouncer :6432)
+#
+# IDEMPOTEN & REUSABLE:
+#   - Role/db yang sudah ada TIDAK dibuat ulang; password + hak CREATEDB
+#     disinkronkan via ALTER (re-run aman, converge ke vars).
+#   - Ganti app berikutnya cukup override vars:
+#     ansible-playbook -i inventory-ec2-postgres.ini postgres/04-buat-user-db.yml \
+#       -e app_db_user=app_b -e app_db_name=db_b -e app_db_password='rahasia_b'
+#
+# PRASYARAT: fase 03a/03b/03c sudah jalan (etcd 3/3 + leader Patroni + PgBouncer).
+# CATATAN:
+#   - Password jangan mengandung ' (single quote); hindari juga $ ` " (masalah
+#     quoting shell). Production: password wajib lewat -e / ansible-vault.
+#   - Kalau app_db_create=false, pastikan db dibuat manual dulu sebelum verify.
+#   - CREATE DATABASE tidak bisa jalan dalam transaction block — kalau user mau
+#     bikin db sendiri lewat CREATEDB, sambung ke :5432 leader LANGSUNG, bukan
+#     lewat PgBouncer (transaction pooling, umumnya bermasalah).
+
+- name: "Fase 4 - Deteksi leader cluster Patroni (REST API :8008)"
+  hosts: postgres
+  gather_facts: false
+  become: false
+  vars:
+    # ===== VARS APP — ganti di sini atau override via --extra-vars =====
+    app_db_user: "app_user"
+    app_db_password: "devel0pment"   # LAB ONLY — production wajib -e/ansible-vault
+    app_db_name: "app_db"
+    app_db_createdb: true            # user boleh CREATE DATABASE sendiri (owner = user)
+    app_db_create: true              # playbook ikut bikin db-nya (owner = user)
+    app_db_via_pgbouncer: true       # daftarkan ke userlist.txt + reload pgbouncer
+  tasks:
+    - name: "Ambil status role node dari REST API Patroni"
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8008/patroni"
+        return_content: true
+      register: status_patroni
+      failed_when: false
+
+    - name: "Simpan role node (leader/replica/unknown)"
+      ansible.builtin.set_fact:
+        node_role: "{{ (status_patroni.json | default({})).role | default('unknown') }}"
+
+    - name: "Daftarkan node leader ke grup dinamis pg_leader"
+      ansible.builtin.add_host:
+        name: "{{ inventory_hostname }}"
+        groups: pg_leader
+      when: node_role == 'leader'
+
+- name: "Fase 4 - Buat role dan database aplikasi di leader"
+  hosts: pg_leader
+  become: yes
+  vars:
+    # ===== VARS APP — sama dengan play 1 (edit di play 1) =====
+    app_db_user: "app_user"
+    app_db_password: "devel0pment"
+    app_db_name: "app_db"
+    app_db_createdb: true
+    app_db_create: true
+    app_db_via_pgbouncer: true
+  tasks:
+    - name: "Periksa apakah role aplikasi sudah ada"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql -tAc
+        "SELECT 1 FROM pg_roles WHERE rolname='{{ app_db_user }}'"
+      register: cek_role
+      changed_when: false
+      failed_when: false
+
+    - name: "Buat role aplikasi (LOGIN + password{% if app_db_createdb %} + CREATEDB{% endif %})"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql -v ON_ERROR_STOP=1 -c
+        "CREATE ROLE {{ app_db_user }} LOGIN PASSWORD '{{ app_db_password }}'{% if app_db_createdb %} CREATEDB{% endif %}"
+      when: cek_role.stdout | trim != '1'
+
+    - name: "Sinkronkan password dan hak CREATEDB role yang sudah ada"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql -v ON_ERROR_STOP=1 -c
+        "ALTER ROLE {{ app_db_user }} WITH LOGIN PASSWORD '{{ app_db_password }}'{% if app_db_createdb %} CREATEDB{% else %} NOCREATEDB{% endif %}"
+      when: cek_role.stdout | trim == '1'
+
+    - name: "Periksa apakah database aplikasi sudah ada"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql -tAc
+        "SELECT 1 FROM pg_database WHERE datname='{{ app_db_name }}'"
+      register: cek_db
+      changed_when: false
+      failed_when: false
+
+    - name: "Buat database aplikasi (owner otomatis = user aplikasi)"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql -v ON_ERROR_STOP=1 -c
+        "CREATE DATABASE {{ app_db_name }} OWNER {{ app_db_user }}"
+      when: cek_db.stdout | trim != '1' and app_db_create
+
+    - name: "Ambil SCRAM secret user aplikasi dari pg_authid (buat userlist pgbouncer)"
+      ansible.builtin.shell: >
+        runuser -u postgres -- {{ pg_bin_dir }}/psql -tAc
+        "SELECT rolpassword FROM pg_authid WHERE rolname='{{ app_db_user }}'"
+      register: scram_app
+      changed_when: false
+      failed_when: false
+
+    - name: "Assert SCRAM secret ketemu (format SCRAM-SHA-256)"
+      ansible.builtin.assert:
+        that:
+          - scram_app.stdout | trim | length > 0
+          - "'SCRAM-SHA-256' in scram_app.stdout"
+        fail_msg: "SCRAM secret user '{{ app_db_user }}' ga ketemu — cek role beneran dibuat"
+
+    - name: "Simpan SCRAM secret sebagai fakta node leader"
+      ansible.builtin.set_fact:
+        scram_secret: "{{ scram_app.stdout | trim }}"
+
+- name: "Fase 4 - Daftarkan user aplikasi ke PgBouncer di semua node"
+  hosts: postgres
+  become: yes
+  vars:
+    # ===== VARS APP — sama dengan play 1 (edit di play 1) =====
+    app_db_user: "app_user"
+    app_db_password: "devel0pment"
+    app_db_name: "app_db"
+    app_db_createdb: true
+    app_db_create: true
+    app_db_via_pgbouncer: true
+    pg_leader_name: "{{ groups['pg_leader'][0] }}"
+  tasks:
+    - name: "Tulis atau perbarui entry user aplikasi di userlist.txt"
+      ansible.builtin.lineinfile:
+        path: /etc/pgbouncer/userlist.txt
+        line: '"{{ app_db_user }}" "{{ hostvars[pg_leader_name].scram_secret }}"'
+        regexp: '^"{{ app_db_user }}"'
+        owner: postgres
+        group: postgres
+        mode: "0640"
+      when: app_db_via_pgbouncer
+
+    - name: "Reload pgbouncer (baca userlist baru; koneksi existing aman)"
+      ansible.builtin.systemd:
+        name: pgbouncer
+        state: reloaded
+      when: app_db_via_pgbouncer
+      # Kalau unit pgbouncer ternyata ga punya ExecReload, ganti jadi:
+      # ansible.builtin.command: pgbouncer -R   (online reload via console)
+
+- name: "Fase 4 - Verify login user aplikasi dari leader"
+  hosts: pg_leader
+  become: yes
+  vars:
+    # ===== VARS APP — sama dengan play 1 (edit di play 1) =====
+    app_db_user: "app_user"
+    app_db_password: "devel0pment"
+    app_db_name: "app_db"
+    app_db_createdb: true
+    app_db_create: true
+    app_db_via_pgbouncer: true
+  tasks:
+    - name: "Test login direct ke PostgreSQL (:5432) sebagai user aplikasi"
+      ansible.builtin.shell: >
+        PGPASSWORD='{{ app_db_password }}' runuser -u postgres -- {{ pg_bin_dir }}/psql
+        -h 127.0.0.1 -p 5432 -U {{ app_db_user }} -d {{ app_db_name }}
+        -tAc "SELECT current_user || ' @ ' || current_database();"
+      register: test_5432
+      changed_when: false
+
+    - name: "Test login lewat PgBouncer (:6432) sebagai user aplikasi"
+      ansible.builtin.shell: >
+        PGPASSWORD='{{ app_db_password }}' runuser -u postgres -- {{ pg_bin_dir }}/psql
+        -h 127.0.0.1 -p 6432 -U {{ app_db_user }} -d {{ app_db_name }}
+        -tAc "SELECT current_user || ' @ ' || current_database();"
+      register: test_6432
+      changed_when: false
+      when: app_db_via_pgbouncer
+
+    - name: "Tampilkan hasil verify"
+      ansible.builtin.debug:
+        msg:
+          - "=== direct :5432 ==="
+          - "{{ test_5432.stdout }}"
+          - "=== pgbouncer :6432 ==="
+          - "{{ test_6432.stdout | default('(skip — app_db_via_pgbouncer=false)') }}"
+          - "=== info koneksi app ==="
+          - "Leader : {{ inventory_hostname }} ({{ pg_node_ip[inventory_hostname] }})"
+          - "App    : psql -h {{ pg_node_ip[inventory_hostname] }} -p 6432 -U {{ app_db_user }} -d {{ app_db_name }}"
