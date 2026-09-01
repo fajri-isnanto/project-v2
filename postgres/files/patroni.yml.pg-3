@@ -20,11 +20,11 @@ bootstrap:
     loop_wait: 10
     retry_timeout: 10
     maximum_lag_on_failover: 1048576
-    # RPO=0: 1 sync standby (Patroni atur synchronous_standby_names dinamis).
-    # strict=false -> standby sync mati, primary tetap terima write (lab).
-    synchronous_mode: true
-    synchronous_node_count: 1
-    synchronous_mode_strict: false
+    # ASYNC (keputusan 2026-09): RPO > 0 — primary TIDAK nunggu standby,
+    # performa maksimal, resiko hilang data beberapa detik terakhir saat
+    # failover. Model master-slave: 1 primary (write), replica read-only.
+    # Traffic aplikasi HANYA ke primary (routing via Patroni REST API :8008).
+    synchronous_mode: false
     postgresql:
       use_pg_rewind: true
       use_slots: true
@@ -56,13 +56,13 @@ postgresql:
   authentication:
     replication:
       username: replicator
-      password: kodok
+      password: devel0pment
     superuser:
       username: postgres
-      password: kodok
+      password: devel0pment
     rewind:
       username: rewind_user
-      password: kodok
+      password: devel0pment
   parameters:
     unix_socket_directories: '/var/run/postgresql'
     listen_addresses: '*'

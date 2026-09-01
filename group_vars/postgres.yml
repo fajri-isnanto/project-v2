@@ -27,6 +27,8 @@ pg_node_ip:
   pg-3: "10.192.67.184"
 
 # Password — LAB ONLY (production wajib ansible-vault)
-pg_superuser_password: "kodok"
-pg_replication_password: "kodok"
-pg_rewind_password: "kodok"
+# CATATAN: nilai di sini harus SAMA dengan files/patroni.yml.pg-N (statis,
+# tanpa jinja — var ini dokumentasi, tidak dipakai langsung oleh playbook)
+pg_superuser_password: "devel0pment"
+pg_replication_password: "devel0pment"
+pg_rewind_password: "devel0pment"
